@@ -1,45 +1,70 @@
-# Selenium Bot Project
+# Selenium Bot Project with Telegram Control
 
 ## Overview
-This project contains a Selenium-based automation bot that logs into a forum website and posts content automatically. The bot runs in headless mode (no visible browser window).
+This project contains a Selenium-based automation bot that logs into a forum website and posts content automatically. The bot runs in headless mode (no visible browser window) and can be controlled via Telegram!
 
 ## Project Structure
-- `bot.py` - Main Selenium automation script
+- `telegram_bot.py` - Telegram bot for controlling the automation (main entry point)
+- `selenium_poster.py` - Core Selenium automation logic
+- `bot.py` - Legacy standalone script (still works)
 - `links.txt` - File containing image links to post (one per line)
 - `.pythonlibs/` - Python virtual environment with dependencies
 
 ## Setup Complete
 - Python 3.11 installed
 - Selenium package installed
+- python-telegram-bot package installed
 - Chromium and ChromeDriver installed for headless browsing
 
-## How to Use
-1. Add your image links to `links.txt`, one link per line
-2. The bot will:
-   - Log into the specified forum
-   - Navigate to the thread
-   - Post each link with formatted content
-   - Remove posted links from the file
-   - Wait between posts (configurable delay)
+## How to Use via Telegram
+
+### Getting Started
+1. The Telegram bot is already running! Find your bot on Telegram using the username you created with @BotFather
+2. Start a chat with your bot and send `/start` to see available commands
+
+### Available Commands
+- `/start` - Show welcome message and command list
+- `/help` - Show detailed command help
+- `/add <link>` - Add an image link to the queue
+  - Example: `/add https://example.com/image.jpg`
+- `/status` - Check how many links are in the queue
+- `/run` - Start posting all queued links (this triggers the Selenium bot)
+
+### Workflow
+1. Add links to the queue using `/add` command (or edit `links.txt` directly)
+2. Use `/status` to check your queue
+3. Send `/run` to start posting
+4. The bot will:
+   - Log into the forum
+   - Post each link with your custom template
+   - Remove posted links from the queue
+   - Wait 10 seconds between posts
+
+## Alternative: Direct File Method
+You can still add links directly to `links.txt` (one per line) and use `/run` to process them.
 
 ## Configuration
-Your forum credentials are stored securely as environment secrets:
-- `FORUM_USERNAME` - Your forum username (stored in Replit Secrets)
-- `FORUM_PASSWORD` - Your forum password (stored in Replit Secrets)
 
-Edit `bot.py` to customize:
-- `THREAD_URL` - Target thread URL
-- `POST_DELAY` - Seconds to wait between posts (default: 10)
-- Post content template (around line 81)
+### Required Secrets (Stored in Replit Secrets)
+- `TELEGRAM_BOT_TOKEN` - Your Telegram bot token from @BotFather
+- `FORUM_USERNAME` - Your forum username
+- `FORUM_PASSWORD` - Your forum password
+
+### Customization
+Edit `selenium_poster.py` to customize:
+- `THREAD_URL` - Target thread URL (line 11)
+- `POST_DELAY` - Seconds to wait between posts (default: 10, line 13)
+- Post content template (around line 54-62)
 
 ## Running the Bot
-The bot is configured as a workflow and can be started/stopped using the workflow controls. It will process all links in `links.txt` and exit when complete.
+The Telegram bot is configured as a workflow and runs automatically when the project starts. It stays active and waits for your commands on Telegram.
 
 ## Important Notes
 - Links are removed from `links.txt` after successful posting
-- The bot runs in headless mode (no GUI)
-- Make sure `links.txt` contains valid URLs before running
+- The Selenium bot runs in headless mode (no GUI)
+- Posts are delayed by 10 seconds to avoid flooding
+- You can control everything remotely via Telegram!
 - Empty lines in `links.txt` are automatically skipped
 
 ## Last Updated
-October 27, 2025
+October 27, 2025 - Added Telegram bot integration for remote control

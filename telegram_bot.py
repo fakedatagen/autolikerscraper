@@ -102,7 +102,18 @@ async def main():
     application.add_handler(CommandHandler("run", run_bot))
     
     print("🤖 Telegram bot is running...")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        print("\n👋 Stopping bot...")
+    finally:
+        await application.stop()
+        await application.shutdown()
 
 if __name__ == '__main__':
     asyncio.run(main())
