@@ -6,11 +6,16 @@ import time
 import os
 
 # ======== CONFIGURATION ========
-USERNAME = "onlyfakes"
-PASSWORD = "Ashish#123"
+USERNAME = os.getenv("FORUM_USERNAME")
+PASSWORD = os.getenv("FORUM_PASSWORD")
 THREAD_URL = "https://desifakes.net/threads/imagination-into-reality-premium-fakes-by-onlyfakes.57085/" #"https://desifakes.net/threads/bhabhi-ji-ghar-par-hai-onlyfakes-2025.56863/"
 LINKS_FILE = "links.txt"
 POST_DELAY = 10  # seconds between posts
+
+if not USERNAME or not PASSWORD:
+    print("❌ Error: FORUM_USERNAME and FORUM_PASSWORD environment variables must be set.")
+    print("Please add these secrets in the Replit Secrets tab.")
+    exit(1)
 
 # ======== SELENIUM SETUP ========
 #driver = webdriver.Chrome()
