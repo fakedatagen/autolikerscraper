@@ -23,11 +23,14 @@ This project contains a Selenium-based automation bot that logs into a forum web
    - Wait between posts (configurable delay)
 
 ## Configuration
+Your forum credentials are stored securely as environment secrets:
+- `FORUM_USERNAME` - Your forum username (stored in Replit Secrets)
+- `FORUM_PASSWORD` - Your forum password (stored in Replit Secrets)
+
 Edit `bot.py` to customize:
-- `USERNAME` and `PASSWORD` - Login credentials
 - `THREAD_URL` - Target thread URL
 - `POST_DELAY` - Seconds to wait between posts (default: 10)
-- Post content template (around line 73)
+- Post content template (around line 81)
 
 ## Running the Bot
 The bot is configured as a workflow and can be started/stopped using the workflow controls. It will process all links in `links.txt` and exit when complete.
