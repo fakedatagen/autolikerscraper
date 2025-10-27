@@ -24,14 +24,23 @@ This project contains a Selenium-based automation bot that logs into a forum web
 
 ### Available Commands
 - `/start` - Show welcome message and command list
-- `/help` - Show detailed command help
-- `/add <link>` - Add an image link to the queue
-  - Example: `/add https://example.com/image.jpg`
+- `/help` - Show detailed command help and examples
+- `/add` - Add image links to the queue (supports multiple formats!)
+  - Plain URL: `/add https://example.com/image.jpg`
+  - BBCode format: `/add [img]https://i.ibb.co/abc/image.jpg[/img]`
+  - Multiple links at once:
+    ```
+    /add [img]https://i.ibb.co/abc/image1.jpg[/img]
+    [img]https://i.ibb.co/xyz/image2.jpg[/img]
+    [img]https://i.ibb.co/def/image3.jpg[/img]
+    ```
 - `/status` - Check how many links are in the queue
 - `/run` - Start posting all queued links (this triggers the Selenium bot)
 
 ### Workflow
-1. Add links to the queue using `/add` command (or edit `links.txt` directly)
+1. Add links to the queue using `/add` command
+   - Copy-paste multiple `[img]URL[/img]` tags in one message
+   - The bot automatically extracts all URLs
 2. Use `/status` to check your queue
 3. Send `/run` to start posting
 4. The bot will:
@@ -39,6 +48,13 @@ This project contains a Selenium-based automation bot that logs into a forum web
    - Post each link with your custom template
    - Remove posted links from the queue
    - Wait 10 seconds between posts
+
+### Link Format Support
+The bot intelligently parses multiple link formats:
+- **BBCode tags**: `[img]https://example.com/image.jpg[/img]` (recommended)
+- **Plain URLs**: `https://example.com/image.jpg`
+- **Multiple links**: Send several links in one message
+- **Mixed formats**: Combine BBCode and plain URLs
 
 ## Alternative: Direct File Method
 You can still add links directly to `links.txt` (one per line) and use `/run` to process them.
@@ -67,4 +83,4 @@ The Telegram bot is configured as a workflow and runs automatically when the pro
 - Empty lines in `links.txt` are automatically skipped
 
 ## Last Updated
-October 27, 2025 - Added Telegram bot integration for remote control
+October 27, 2025 - Enhanced Telegram bot with multi-link support and BBCode [img] tag parsing

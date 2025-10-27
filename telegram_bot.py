@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from selenium_poster import run_posting_bot
@@ -13,6 +14,21 @@ if not TELEGRAM_TOKEN:
 
 LINKS_FILE = "links.txt"
 
+def extract_links(text):
+    """Extract URLs from text, supporting both plain URLs and [img]URL[/img] format"""
+    links = []
+    
+    img_tag_pattern = r'\[img\](https?://[^\]]+)\[/img\]'
+    img_matches = re.findall(img_tag_pattern, text, re.IGNORECASE)
+    links.extend(img_matches)
+    
+    text_without_tags = re.sub(img_tag_pattern, '', text, flags=re.IGNORECASE)
+    url_pattern = r'https?://[^\s]+'
+    plain_urls = re.findall(url_pattern, text_without_tags)
+    links.extend(plain_urls)
+    
+    return [link.strip() for link in links if link.strip()]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_message = """
 🤖 *Selenium Forum Bot*
@@ -21,15 +37,19 @@ I can help you automatically post images to your forum thread!
 
 *Available Commands:*
 /start - Show this welcome message
-/add <link> - Add an image link to the queue
+/add - Add image links to the queue (supports multiple links!)
 /run - Start posting all queued links
 /status - Check how many links are queued
-/help - Show command help
+/help - Show detailed command help
 
-*How to use:*
-1. Add image links using /add command
-2. Use /run to start posting
-3. The bot will post each link and remove it from the queue
+*Quick Start:*
+Send links in BBCode format:
+```
+/add [img]https://i.ibb.co/abc/image1.jpg[/img]
+[img]https://i.ibb.co/xyz/image2.jpg[/img]
+```
+
+Use /help for more examples and tips!
 """
     await update.message.reply_text(welcome_message, parse_mode='Markdown')
 
@@ -37,8 +57,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
 *Command Guide:*
 
-📝 */add <link>* - Add a new image link
-   Example: `/add https://example.com/image.jpg`
+📝 */add* - Add image links to the queue
+   Supports multiple formats:
+   • Plain URLs: `https://example.com/image.jpg`
+   • BBCode format: `[img]https://example.com/image.jpg[/img]`
+   • Multiple links at once (one per line)
+   
+   Example:
+   ```
+   /add [img]https://i.ibb.co/abc/image1.jpg[/img]
+   [img]https://i.ibb.co/xyz/image2.jpg[/img]
+   ```
 
 🚀 */run* - Start posting all queued links
    The bot will post each link with a 10-second delay
@@ -47,7 +76,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
    Shows how many links are waiting to be posted
 
 💡 *Tips:*
-• You can add multiple links, one at a time
+• You can paste multiple [img] tags at once
+• Mix plain URLs and [img] tags
 • Links are posted in the order they were added
 • Successfully posted links are automatically removed
 """
@@ -55,19 +85,26 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Please provide a link.\nUsage: /add <link>")
+        await update.message.reply_text("❌ Please provide links.\n\nUsage: `/add [img]URL[/img]` or `/add URL`\n\nYou can send multiple links at once!", parse_mode='Markdown')
         return
     
-    link = " ".join(context.args)
+    full_text = " ".join(context.args)
+    links = extract_links(full_text)
     
-    if not link.startswith("http"):
-        await update.message.reply_text("❌ Please provide a valid URL starting with http:// or https://")
+    if not links:
+        await update.message.reply_text("❌ No valid links found. Please provide URLs in one of these formats:\n• `https://example.com/image.jpg`\n• `[img]https://example.com/image.jpg[/img]`", parse_mode='Markdown')
         return
     
     with open(LINKS_FILE, "a", encoding="utf-8") as f:
-        f.write(link + "\n")
+        for link in links:
+            f.write(link + "\n")
     
-    await update.message.reply_text(f"✅ Link added to queue!\n🔗 {link}")
+    if len(links) == 1:
+        await update.message.reply_text(f"✅ Link added to queue!\n🔗 {links[0]}")
+    else:
+        link_preview = "\n".join([f"{i+1}. {link}" for i, link in enumerate(links[:3])])
+        more_text = f"\n...and {len(links) - 3} more" if len(links) > 3 else ""
+        await update.message.reply_text(f"✅ Added {len(links)} links to queue!\n\n{link_preview}{more_text}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(LINKS_FILE):
