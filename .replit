@@ -4,7 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["chromedriver", "chromium", "geckodriver"]
+packages = ["chromedriver", "chromium", "geckodriver", "imagemagick_light", "wget"]
 
 [workflows]
 runButton = "Project"
@@ -21,6 +21,7 @@ args = "Telegram Bot"
 [[workflows.workflow]]
 name = "Telegram Bot"
 author = "agent"
+mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
@@ -28,3 +29,11 @@ args = "python telegram_bot.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
+localPort = 8080
+externalPort = 80
