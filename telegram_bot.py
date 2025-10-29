@@ -147,7 +147,7 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     asyncio.create_task(watcher())
 
-    # live status updates every 5s while running (FIXED: interval is 5s)
+    # live status updates every 5s while running (FIXED: interval is5s)
     async def live_status():
         await asyncio.sleep(5)
         while _run_progress.get("running"):
