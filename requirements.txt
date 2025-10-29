@@ -1,6 +1,5 @@
-flask
+Flask==3.0.3
+selenium==4.25.0
+webdriver-manager==4.0.2
 requests
-selenium
-python-telegram-bot
-nest_asyncio
-webdriver-manager
+beautifulsoup4
