@@ -6,6 +6,8 @@ import threading
 import sqlite3
 import datetime
 import html
+import time
+from flask import Flask, Response
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -23,6 +25,38 @@ _run_progress = {"running": False}
 _run_future = None
 _run_stop_event = None
 
+# ---------- Live behaviour log ----------
+live_output = []
+
+def add_output(message: str):
+    """Add live behaviour message visible on /live page."""
+    timestamp = time.strftime("[%H:%M:%S]")
+    entry = f"{timestamp} | {message}"
+    print(entry)
+    live_output.append(entry)
+    if len(live_output) > 200:
+        live_output.pop(0)
+
+# ---------- Flask live log server ----------
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Bot is running — visit /live for live backend activity.", 200
+
+@app.route('/live')
+def live():
+    def stream():
+        yield "<html><head><meta http-equiv='refresh' content='3'></head><body>"
+        yield "<h2>🚀 Live Bot Activity</h2><pre style='font-size:14px;'>"
+        for line in live_output[-100:]:
+            yield line + "\n"
+        yield "</pre></body></html>"
+    return Response(stream(), mimetype='text/html')
+
+def run_flask():
+    add_output("🌐 Flask live monitor starting on port 8080...")
+    app.run(host="0.0.0.0", port=8080)
 
 # ---------- DB helpers ----------
 def get_dashboard_data():
@@ -83,7 +117,7 @@ def get_dashboard_data():
         conn.close()
 
     except Exception as e:
-        print(f"DB error: {e}")
+        add_output(f"DB error: {e}")
     return data
 
 
@@ -107,10 +141,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
            "/status - Show dashboard\n"
            "/clearlogs - Clear activity logs\n"
            "/help - Show this message\n")
+    add_output(f"/start command from {update.effective_user.username}")
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_output(f"/help command from {update.effective_user.username}")
     await start(update, context)
 
 
@@ -123,15 +159,18 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _run_progress["running"] = True
 
     await update.message.reply_text("🚀 Starting scraper in background...")
+    add_output(f"Scraper started by {update.effective_user.username}")
+
     loop = asyncio.get_event_loop()
     stop_event = threading.Event()
     _run_stop_event = stop_event
 
     def scraper_task():
         try:
-            # Pass the stop_event and progress dict to the scraper
+            add_output("Scraper thread executing...")
             return run_scraper(stop_event, _run_progress)
         except Exception as e:
+            add_output(f"❌ Scraper crashed: {e}")
             return f"❌ Scraper crashed: {e}"
 
     _run_future = loop.run_in_executor(None, scraper_task)
@@ -144,30 +183,29 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with _run_lock:
                 _run_progress["running"] = False
                 _run_stop_event = None
+            add_output("Scraper finished execution.")
 
     asyncio.create_task(watcher())
 
-    # live status updates every 5s while running (FIXED: interval is5s)
     async def live_status():
         await asyncio.sleep(30)
         while _run_progress.get("running"):
             data = get_dashboard_data()
             last = data["last"]
             if last:
-                # escape to avoid accidental HTML tags
                 thread_esc = html.escape(last["thread"])
                 message_esc = html.escape(str(last["message"]))
                 await update.message.reply_text(
                     f"<b>⚙️ Live Status</b>\n👥 Users: {data['users']}\n🧵 Threads: {data['threads']}\n❤️ Likes: {data['likes']}\n\n"
                     f"<b>Last</b>\n👤 {html.escape(last['user'])}\n🧩 {thread_esc}\n💬 {html.escape(last['activity'])}\n💭 {message_esc}\n🕒 {html.escape(str(last['time']))}",
                     parse_mode=ParseMode.HTML)
-            await asyncio.sleep(30)  # ✅ Status check interval set to 5 seconds
+            await asyncio.sleep(30)
 
     asyncio.create_task(live_status())
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Immediately terminate the entire process when /stop is issued."""
+    add_output(f"/stop command from {update.effective_user.username}")
     await update.message.reply_text(
         "🛑 Force stop requested — terminating now...")
     os._exit(0)
@@ -195,17 +233,22 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
            f"🏃 Active Users Today: **{data['active_today']}**\n\n"
            f"{last_info}")
 
+    add_output(f"/status command from {update.effective_user.username}")
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 
 async def clearlogs_command(update: Update,
                             context: ContextTypes.DEFAULT_TYPE):
+    add_output(f"/clearlogs command from {update.effective_user.username}")
     result = clear_logs()
     await update.message.reply_text(result)
 
 
 # ---------- main ----------
 async def main():
+    threading.Thread(target=run_flask, daemon=True).start()
+    add_output("🌐 Flask live monitor started.")
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -214,16 +257,16 @@ async def main():
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("clearlogs", clearlogs_command))
 
-    print("🤖 Telegram bot running...")
+    add_output("🤖 Telegram bot initializing...")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
     try:
-        # This keeps the main async loop running indefinitely
+        add_output("🟢 Telegram bot polling started.")
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
-        print("Stopping...")
+        add_output("🛑 Telegram bot stopping...")
     finally:
         await app.stop()
 
@@ -232,4 +275,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
+        add_output("Exiting...")
         print("Exiting...")
