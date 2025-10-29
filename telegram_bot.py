@@ -149,7 +149,7 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # live status updates every 5s while running (FIXED: interval is5s)
     async def live_status():
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         while _run_progress.get("running"):
             data = get_dashboard_data()
             last = data["last"]
@@ -161,7 +161,7 @@ async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"<b>⚙️ Live Status</b>\n👥 Users: {data['users']}\n🧵 Threads: {data['threads']}\n❤️ Likes: {data['likes']}\n\n"
                     f"<b>Last</b>\n👤 {html.escape(last['user'])}\n🧩 {thread_esc}\n💬 {html.escape(last['activity'])}\n💭 {message_esc}\n🕒 {html.escape(str(last['time']))}",
                     parse_mode=ParseMode.HTML)
-            await asyncio.sleep(5)  # ✅ Status check interval set to 5 seconds
+            await asyncio.sleep(30)  # ✅ Status check interval set to 5 seconds
 
     asyncio.create_task(live_status())
 
