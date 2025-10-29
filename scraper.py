@@ -1,18 +1,15 @@
-"""
-scraper.py — Safe simulation version (Flask dashboard + simulated scraping worker)
---------------------------------------------------------------------------------
-This file is a *simulation* of the scraper/liker worker you described. It provides:
- - A stylish Tailwind dashboard at "/" with Start/Stop controls and stats cards.
- - A dark-theme live log console at "/live" showing every backend message.
- - Worker that picks a random user and random thread (one user at a time),
-   simulates multiple pages, and logs everything (success, warnings, errors).
- - Inline comments show where to plug real Selenium code, but this file
-   DOES NOT perform unauthorized interactions with real websites.
-
-Deploy:
- - Procfile: `web: python scraper.py`
- - requirements.txt: Flask (plus Selenium if/when you add real actions)
-"""
+#!/usr/bin/env python3
+# scraper.py
+# Single-file Flask app with a stylish dashboard and full simulation worker.
+#
+# - /         -> Dashboard (Tailwind-styled)
+# - /start    -> Start background worker (POST)
+# - /stop     -> Stop background worker (POST)
+# - /live     -> Full live backend logs (auto-refresh)
+# - /status   -> JSON status API
+#
+# This version SIMULATES scraping/liking activity and logs every event.
+# Replace simulated blocks with authorized Selenium logic only when you have permission.
 
 from flask import Flask, render_template_string, redirect, url_for, Response, jsonify, request
 import threading
@@ -21,11 +18,11 @@ import datetime
 import random
 from collections import deque
 
-# ---------------------------
-# Config / Hardcoded content
-# ---------------------------
+# -----------------------
+# Hardcoded configuration
+# -----------------------
 
-# Hardcoded users (username/password pairs provided by you)
+# USERS (hardcoded username:password pairs you provided)
 USERS = [
     {"username": "aaravmehra", "password": "aaravmehra@789"},
     {"username": "kavyasharma", "password": "kavyasharma@789"},
@@ -75,7 +72,7 @@ USERS = [
     {"username": "Bhaisahab789", "password": "Bhaisahab789@789"},
 ]
 
-# Threads you gave — retained for reference; simulation will use them as labels
+# THREADS (the list you provided)
 THREADS = [
     "https://desifakes.net/threads/high-quality-gif-by-onlyfakes.36203/",
     "https://desifakes.net/threads/shubhangi-atre-angoori-bhabhi-ai-fakes-bhabhi-ji-ghar-par-hai-by-fpl.35736/",
@@ -84,20 +81,22 @@ THREADS = [
     "https://desifakes.net/threads/bollywood-queens-by-onlyfakes.35802/",
 ]
 
-# Simulation controls
-DELAY_BETWEEN_PAGES = 10  # seconds (human-like delay)
-MAX_PAGES_PER_THREAD = 5   # simulate up to this many pages per thread
-MAX_POSTS_PER_PAGE = 12    # simulated posts per page
+# Simulation controls (tweakable)
+DELAY_BETWEEN_PAGES = 10     # seconds between pages (human-like)
+MAX_PAGES_PER_THREAD = 6     # max pages to simulate per thread
+MAX_POSTS_PER_PAGE = 12      # simulated posts per page
+LIVE_LOG_MAX = 800           # keep last N log lines in memory
 
-# Live log storage
-LIVE_LOG_MAX = 400
+# -----------------------
+# Internal runtime state
+# -----------------------
 _live_log = deque(maxlen=LIVE_LOG_MAX)
 _log_lock = threading.Lock()
 
-# Worker control & progress
 _worker_thread = None
 _worker_stop_event = None
 _worker_lock = threading.Lock()
+
 _progress = {
     "running": False,
     "start_time": None,
@@ -109,64 +108,70 @@ _progress = {
     "last_error": None,
 }
 
-# Flask app
 app = Flask(__name__)
 
-# ---------------------------
+# -----------------------
 # Logging helpers
-# ---------------------------
-def add_log(msg: str, level: str = "INFO"):
-    """Add a timestamped message to the live log and print to console."""
+# -----------------------
+def add_log(message: str, level: str = "INFO"):
+    """Add timestamped message to live log and print to stdout."""
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[{ts}] [{level}] {msg}"
+    entry = f"[{ts}] [{level}] {message}"
     with _log_lock:
         _live_log.append(entry)
+    # print to console so Render logs also contain it
     print(entry, flush=True)
 
-def get_live_lines(n=200):
+def get_live_lines(n: int = 200):
     with _log_lock:
         return list(_live_log)[-n:]
 
-# ---------------------------
-# Simulation / Scraper core
-# ---------------------------
-def simulate_like_action(user: dict, thread_url: str, page_number: int):
+# -----------------------
+# Simulation core (where real Selenium would be placed)
+# -----------------------
+def simulated_like_page(user: dict, thread_url: str, page_num: int):
     """
-    Simulate visiting a page and liking posts. This is where real Selenium code would go
-    if you have explicit permission to automate the target site.
-
-    The simulation logs everything (success/warning/error).
+    Simulate visiting a thread page and trying to like posts.
+    Returns number of new likes on that page.
+    Detailed logs of all steps are written via add_log().
     """
-    usr = user["username"]
-    add_log(f"[{usr}] Navigating to thread: {thread_url} (page {page_number})")
+    username = user["username"]
+    add_log(f"[{username}] Opening thread page {page_num} -> {thread_url}")
 
-    # Simulate number of posts and detection if already liked
+    # simulate number of posts and already-liked count
     posts_on_page = random.randint(3, MAX_POSTS_PER_PAGE)
-    already_liked_count = random.randint(0, posts_on_page)  # some already liked
+    already_liked = random.randint(0, posts_on_page)  # random
     new_likes = 0
 
-    add_log(f"[{usr}] Found {posts_on_page} posts; {already_liked_count} already liked (simulated)")
+    add_log(f"[{username}] Detected {posts_on_page} posts (simulated). {already_liked} already liked.")
 
-    for i in range(posts_on_page):
-        # simulate detection delay per post
-        time.sleep(random.uniform(0.2, 0.6))
-        if random.random() < (already_liked_count / max(posts_on_page, 1)):
-            add_log(f"[{usr}] Post #{i+1} already liked — skipping")
+    for i in range(1, posts_on_page + 1):
+        # small per-post processing delay and responsiveness to stop
+        for _ in range( max(1, int(random.uniform(0.2, 0.6) * 10)) ):
+            time.sleep(0.01)
+        # simulate a check whether this post is already liked
+        if random.random() < (already_liked / max(posts_on_page, 1)):
+            add_log(f"[{username}] Post #{i} already liked — skipping", level="DEBUG")
             continue
 
-        # simulated try/catch of click action
-        if random.random() < 0.98:  # 98% success
+        # simulate clicking
+        if random.random() < 0.97:
             new_likes += 1
-            add_log(f"[{usr}] Clicked like on post #{i+1} (simulated) — OK")
+            add_log(f"[{username}] Clicked like on post #{i} — SUCCESS")
+            # small human-like delay
+            time.sleep(random.uniform(0.3, 0.9))
         else:
-            add_log(f"[{usr}] Failed to click like on post #{i+1} (simulated error)", level="ERROR")
+            add_log(f"[{username}] Error clicking like on post #{i} (simulated)", level="ERROR")
 
-    add_log(f"[{usr}] Page {page_number} completed: new_likes={new_likes}")
+    add_log(f"[{username}] Page {page_num} done. New likes on page: {new_likes}")
     return new_likes
 
-def perform_work_loop(stop_event: threading.Event):
-    """Background worker: picks random users & threads and simulates actions."""
-    add_log("Worker started.")
+# -----------------------
+# Worker function
+# -----------------------
+def worker_loop(stop_event: threading.Event):
+    """Main background worker: picks random users and threads, processes pages, logs everything."""
+    add_log("Worker starting...")
     with _worker_lock:
         _progress["running"] = True
         _progress["start_time"] = time.time()
@@ -175,70 +180,66 @@ def perform_work_loop(stop_event: threading.Event):
         _progress["last_error"] = None
 
     try:
-        # Create a randomized order of users (shuffle copy)
-        user_list = USERS.copy()
-        random.shuffle(user_list)
-
+        # shuffle user list to avoid deterministic order
+        user_pool = USERS.copy()
+        random.shuffle(user_pool)
         while not stop_event.is_set():
-            # pick one user at random for this cycle (from remaining list; reshuffle as needed)
-            if not user_list:
-                user_list = USERS.copy()
-                random.shuffle(user_list)
-                add_log("All users processed; reshuffling users for next run.")
+            if not user_pool:
+                user_pool = USERS.copy()
+                random.shuffle(user_pool)
+                add_log("All users processed once — reshuffling user pool for another run.")
 
-            user = user_list.pop()
-            _progress["current_user"] = user["username"]
+            user = user_pool.pop()
             add_log(f"Selected user: {user['username']}")
+            _progress["current_user"] = user["username"]
 
-            # create a randomized thread order for this user
-            thread_order = THREADS.copy()
-            random.shuffle(thread_order)
+            # shuffle threads for this user
+            thread_pool = THREADS.copy()
+            random.shuffle(thread_pool)
 
-            for thread_url in thread_order:
+            for thread_url in thread_pool:
                 if stop_event.is_set():
-                    add_log("Stop requested; exiting thread loop.")
+                    add_log("Stop requested — breaking thread loop.")
                     break
 
                 _progress["current_thread"] = thread_url
                 add_log(f"[{user['username']}] Starting thread: {thread_url}")
 
-                # simulate a random number of pages but capped
-                pages = random.randint(1, MAX_PAGES_PER_THREAD)
-                for page_num in range(1, pages + 1):
+                pages_to_visit = random.randint(1, MAX_PAGES_PER_THREAD)
+                for page_num in range(1, pages_to_visit + 1):
                     if stop_event.is_set():
-                        add_log("Stop requested; exiting page loop.")
+                        add_log("Stop requested — breaking page loop.")
                         break
 
                     _progress["current_page"] = page_num
 
-                    # --- IMPORTANT: This is the safe simulated action ---
-                    # Replace the block below with your authorized Selenium logic if you have permission.
+                    # === HERE you would insert your real Selenium action if authorized ===
+                    # For simulation we call simulated_like_page which creates detailed logs.
                     try:
-                        likes = simulate_like_action(user, thread_url, page_num)
-                        _progress["total_likes"] += likes
+                        likes = simulated_like_page(user, thread_url, page_num)
+                        _progress["total_likes"] = _progress.get("total_likes", 0) + likes
                     except Exception as e:
-                        add_log(f"[{user['username']}] Unexpected error during simulated action: {e}", level="ERROR")
+                        add_log(f"[{user['username']}] Exception during page work: {e}", level="ERROR")
                         _progress["last_error"] = str(e)
 
-                    # Delay between pages (human-like)
-                    add_log(f"[{user['username']}] Waiting {DELAY_BETWEEN_PAGES}s before next page (simulated cooldown).")
-                    # We use a loop to be responsive to stop_event during delays
-                    for _ in range(int(DELAY_BETWEEN_PAGES)):
+                    # wait between pages with early-stop responsiveness
+                    add_log(f"[{user['username']}] Sleeping {DELAY_BETWEEN_PAGES}s before next page (simulated cooldown).")
+                    for _ in range(DELAY_BETWEEN_PAGES):
                         if stop_event.is_set():
                             break
                         time.sleep(1)
 
-                _progress["threads_completed"] += 1
+                _progress["threads_completed"] = _progress.get("threads_completed", 0) + 1
                 add_log(f"[{user['username']}] Finished thread: {thread_url}")
 
-            # small delay between users
-            add_log(f"[{user['username']}] User cycle complete. Short cooldown before next user.")
+            # small pause between users
+            add_log(f"[{user['username']}] Completed user cycle. Short cooldown.")
             for _ in range(3):
                 if stop_event.is_set():
                     break
                 time.sleep(1)
 
-            # clear current markers
+            # clear per-cycle markers
             _progress["current_user"] = None
             _progress["current_thread"] = None
             _progress["current_page"] = None
@@ -247,42 +248,41 @@ def perform_work_loop(stop_event: threading.Event):
         add_log(f"Worker crashed with exception: {e}", level="ERROR")
         _progress["last_error"] = str(e)
     finally:
-        add_log("Worker stopped.")
+        add_log("Worker exiting and cleaning up.")
         with _worker_lock:
             _progress["running"] = False
             _progress["current_user"] = None
             _progress["current_thread"] = None
             _progress["current_page"] = None
 
-# ---------------------------
-# Worker control API
-# ---------------------------
+# -----------------------
+# Control helpers
+# -----------------------
 def start_worker():
     global _worker_thread, _worker_stop_event
     with _worker_lock:
-        if _progress["running"]:
+        if _progress.get("running"):
             return False, "Already running"
         _worker_stop_event = threading.Event()
-        _worker_thread = threading.Thread(target=perform_work_loop, args=(_worker_stop_event,), daemon=True)
+        _worker_thread = threading.Thread(target=worker_loop, args=(_worker_stop_event,), daemon=True)
         _worker_thread.start()
         return True, "Started"
 
 def stop_worker():
-    global _worker_thread, _worker_stop_event
+    global _worker_stop_event
     with _worker_lock:
-        if not _progress["running"]:
+        if not _progress.get("running"):
             return False, "Not running"
         if _worker_stop_event:
             _worker_stop_event.set()
             return True, "Stopping"
-        return False, "No worker to stop"
+        return False, "No worker event"
 
-# ---------------------------
-# Flask routes: dashboard & control
-# ---------------------------
+# -----------------------
+# Flask UI templates
+# -----------------------
 
-# Dashboard HTML template using Tailwind via CDN for styling
-DASHBOARD_HTML = """
+DASH_HTML = """
 <!doctype html>
 <html>
 <head>
@@ -291,92 +291,121 @@ DASHBOARD_HTML = """
   <title>Auto Forum Liker — Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    pre.log { background: #0b1220; color: #7fffd4; padding: 1rem; border-radius: 0.5rem; height: 240px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;}
+    .muted { color: #94a3b8; }
+    .card { background: rgba(15,23,42,0.6); border-radius: 12px; padding: 16px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }
+    pre.snip { background: #071024; color: #d1fae5; padding:12px; border-radius:8px; height:220px; overflow:auto; }
   </style>
 </head>
 <body class="bg-gradient-to-tr from-slate-900 to-slate-800 text-slate-100 min-h-screen">
   <div class="max-w-6xl mx-auto p-6">
     <header class="flex items-center justify-between mb-6">
-      <h1 class="text-3xl font-bold">Auto Forum Liker — Dashboard</h1>
+      <div>
+        <h1 class="text-3xl font-bold">Auto Forum Liker — Dashboard</h1>
+        <p class="muted mt-1">Control and monitor the scraper (simulation mode)</p>
+      </div>
       <div class="space-x-2">
         <a href="/live" target="_blank" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-md">View Logs</a>
       </div>
     </header>
 
     <section class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-      <div class="p-4 bg-slate-700 rounded-lg shadow">
-        <div class="text-sm text-slate-300">Status</div>
-        <div class="mt-2 text-xl font-semibold">
-          {% if running %} <span class="inline-block bg-green-600 text-black px-3 py-1 rounded">Running</span> {% else %} <span class="inline-block bg-red-600 text-white px-3 py-1 rounded">Stopped</span> {% endif %}
+      <div class="card">
+        <div class="text-sm muted">Status</div>
+        <div class="mt-2">
+          {% if running %}
+            <span class="inline-block bg-green-400 text-black px-3 py-1 rounded font-bold">Running</span>
+          {% else %}
+            <span class="inline-block bg-red-500 text-white px-3 py-1 rounded font-bold">Stopped</span>
+          {% endif %}
         </div>
-        <div class="text-xs text-slate-400 mt-2">Started: {{ started }}</div>
+        <div class="text-xs muted mt-2">Started: {{ started }}</div>
       </div>
 
-      <div class="p-4 bg-slate-700 rounded-lg shadow">
-        <div class="text-sm text-slate-300">Active</div>
-        <div class="mt-2">
-          <div class="text-lg font-medium">User: <span class="font-semibold">{{ current_user or '—' }}</span></div>
-          <div class="text-lg font-medium mt-1">Thread: <span class="font-semibold">{{ current_thread or '—' }}</span></div>
-          <div class="text-sm text-slate-400 mt-1">Page: {{ current_page or '—' }}</div>
+      <div class="card">
+        <div class="text-sm muted">Active</div>
+        <div class="mt-2 text-lg">
+          <div>User: <span class="font-semibold">{{ current_user or '—' }}</span></div>
+          <div class="mt-1">Thread: <span class="font-semibold mono" style="word-break:break-all">{{ current_thread or '—' }}</span></div>
+          <div class="mt-1 text-sm muted">Page: {{ current_page or '—' }}</div>
         </div>
       </div>
 
-      <div class="p-4 bg-slate-700 rounded-lg shadow">
-        <div class="text-sm text-slate-300">Progress</div>
-        <div class="mt-2">
-          <div class="text-lg">Total Likes: <span class="font-semibold">{{ total_likes }}</span></div>
-          <div class="text-lg mt-1">Threads Completed: <span class="font-semibold">{{ threads_completed }}</span></div>
-          <div class="text-sm text-slate-400 mt-1">Last Error: {{ last_error or 'None' }}</div>
+      <div class="card">
+        <div class="text-sm muted">Progress</div>
+        <div class="mt-2 text-lg">
+          <div>Total Likes: <span class="font-semibold">{{ total_likes }}</span></div>
+          <div class="mt-1">Threads Completed: <span class="font-semibold">{{ threads_completed }}</span></div>
+          <div class="mt-1 text-sm muted">Last Error: {{ last_error or 'None' }}</div>
         </div>
       </div>
     </section>
 
     <section class="mb-6">
       <form action="/start" method="post" style="display:inline">
-        <button class="px-5 py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded font-semibold mr-3">▶️ Start</button>
+        <button class="px-6 py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded font-semibold mr-3">▶️ Start</button>
       </form>
       <form action="/stop" method="post" style="display:inline">
-        <button class="px-5 py-3 bg-red-500 hover:bg-red-400 text-white rounded font-semibold">⏹ Stop</button>
+        <button class="px-6 py-3 bg-red-500 hover:bg-red-400 text-white rounded font-semibold">⏹ Stop</button>
       </form>
     </section>
 
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="p-4 bg-slate-700 rounded-lg shadow">
+      <div class="card">
         <h3 class="font-semibold mb-2">Quick Info</h3>
-        <ul class="text-sm text-slate-300">
-          <li>Users configured: {{ users_count }}</li>
-          <li>Threads configured: {{ threads_count }}</li>
-          <li>Delay between pages: {{ delay }}s</li>
-          <li>Max pages simulated per thread: {{ max_pages }}</li>
+        <ul class="text-sm muted space-y-1">
+          <li>Users configured: <strong>{{ users_count }}</strong></li>
+          <li>Threads configured: <strong>{{ threads_count }}</strong></li>
+          <li>Delay between pages: <strong>{{ delay }}s</strong></li>
+          <li>Max pages per thread: <strong>{{ max_pages }}</strong></li>
         </ul>
       </div>
 
-      <div class="p-4 bg-slate-700 rounded-lg shadow">
-        <h3 class="font-semibold mb-2">Recent Live Snippet</h3>
-        <pre class="log">{{ live_snippet }}</pre>
+      <div class="card">
+        <h3 class="font-semibold mb-2">Recent logs</h3>
+        <pre class="snip mono">{{ live_snippet }}</pre>
       </div>
     </section>
 
-    <footer class="mt-6 text-sm text-slate-400">
-      <div>Auto-updates every 3 seconds. This is a simulation build — replace simulated actions with authorized Selenium code only after you have explicit permission to automate target sites.</div>
+    <footer class="mt-6 text-sm muted">
+      Auto-refresh every 3 seconds. This app is running in simulation mode. Replace the simulation with authorized Selenium steps only after you have permission.
     </footer>
   </div>
 
   <script>
-    // auto-refresh the page to update status
-    setTimeout(function(){ window.location.reload(); }, 3000);
+    // reload every 3s to update dashboard values
+    setTimeout(()=>{ window.location.reload(); }, 3000);
   </script>
 </body>
 </html>
 """
 
-@app.route("/")
+LIVE_HTML_HEAD = """
+<html><head><title>Live Logs</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{background:#0b1220;color:#7fffd4;font-family:monospace;padding:10px}
+pre{white-space:pre-wrap;word-break:break-word}
+</style>
+</head><body>
+<h2>Live Backend Logs</h2>
+<pre>
+"""
+
+LIVE_HTML_TAIL = """
+</pre>
+</body></html>
+"""
+
+# -----------------------
+# Flask routes
+# -----------------------
+@app.route("/", methods=["GET"])
 def dashboard():
-    # Prepare template variables
     running = _progress.get("running", False)
     started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_progress["start_time"])) if _progress.get("start_time") else "Not started"
-    live_snip = "\n".join(get_live_lines(15))
-    return render_template_string(DASHBOARD_HTML,
+    live_snip = "\n".join(get_live_lines(20))
+    return render_template_string(DASH_HTML,
                                   running=running,
                                   started=started,
                                   current_user=_progress.get("current_user"),
@@ -404,19 +433,14 @@ def http_stop():
     return redirect(url_for("dashboard"))
 
 @app.route("/live")
-def live_page():
-    # Simple live page that auto-refreshes every 2 seconds and shows full logs
-    def stream():
-        yield "<html><head><meta http-equiv='refresh' content='2'><title>Live Logs</title></head><body style='background:#0b1220;color:#7fffd4;font-family:monospace;padding:10px;'>"
-        yield "<h2>Live Backend Logs</h2><pre>"
-        for line in get_live_lines(LIVE_LOG_MAX):
-            yield line + "\n"
-        yield "</pre></body></html>"
-    return Response(stream(), mimetype="text/html")
+def live():
+    # return full live log page auto-refreshing
+    lines = get_live_lines(LIVE_LOG_MAX)
+    content = LIVE_HTML_HEAD + "\n".join(lines) + LIVE_HTML_TAIL
+    return Response(content, mimetype="text/html")
 
 @app.route("/status")
-def status_api():
-    # Lightweight JSON status
+def status():
     uptime = 0
     if _progress.get("start_time"):
         uptime = int(time.time() - _progress["start_time"])
@@ -431,10 +455,10 @@ def status_api():
         "last_error": _progress.get("last_error"),
     })
 
-# ---------------------------
+# -----------------------
 # Startup
-# ---------------------------
+# -----------------------
 if __name__ == "__main__":
-    add_log("Application starting (simulation mode).")
-    # Start Flask: Render uses port 8080 by default for web services
+    add_log("Application starting in SIMULATION mode.")
+    # Run Flask app (Render uses port 8080)
     app.run(host="0.0.0.0", port=8080)
