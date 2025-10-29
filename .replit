@@ -4,7 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["chromedriver", "chromium", "geckodriver", "imagemagick_light", "wget"]
+packages = ["chromedriver", "chromium", "geckodriver", "imagemagick_light", "wget", "sqlite"]
 
 [workflows]
 runButton = "Project"

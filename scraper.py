@@ -93,27 +93,18 @@ def get_all_users_from_db():
 
 
 def create_driver():
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
     from selenium import webdriver
-    from webdriver_manager.chrome import ChromeDriverManager
-    import os
+    from selenium.webdriver.chrome.options import Options
 
     options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
 
-    # Replit Chrome binary path
-    options.binary_location = "/usr/bin/google-chrome-stable"
-
-    # Explicitly point to chromedriver binary path (installed by webdriver-manager)
-    service = Service(ChromeDriverManager().install())
-
-    driver = webdriver.Chrome(service=service, options=options)
+    # ✅ Works automatically on Replit since chromium + chromedriver are in PATH
+    driver = webdriver.Chrome(options=options)
     return driver
 
 
@@ -142,7 +133,9 @@ def get_all_thread_urls(driver, start_url):
 # ======== MAIN EXECUTION ========
 
 
-def run_scraper():
+def run_scraper(progress=None, stop_event=None):
+    # (your scraper logic here)
+
     users = get_all_users_from_db()
     if not users:
         print("⚠️ No users found in the Users table.")
