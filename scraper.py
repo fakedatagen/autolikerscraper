@@ -1,245 +1,440 @@
-# scraper.py (Replit-compatible version)
-import sqlite3
-import datetime
+"""
+scraper.py — Safe simulation version (Flask dashboard + simulated scraping worker)
+--------------------------------------------------------------------------------
+This file is a *simulation* of the scraper/liker worker you described. It provides:
+ - A stylish Tailwind dashboard at "/" with Start/Stop controls and stats cards.
+ - A dark-theme live log console at "/live" showing every backend message.
+ - Worker that picks a random user and random thread (one user at a time),
+   simulates multiple pages, and logs everything (success, warnings, errors).
+ - Inline comments show where to plug real Selenium code, but this file
+   DOES NOT perform unauthorized interactions with real websites.
+
+Deploy:
+ - Procfile: `web: python scraper.py`
+ - requirements.txt: Flask (plus Selenium if/when you add real actions)
+"""
+
+from flask import Flask, render_template_string, redirect, url_for, Response, jsonify, request
+import threading
 import time
+import datetime
 import random
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
+from collections import deque
 
-# ======== CONFIG ========
-BASE_URL = "https://desifakes.net/login"
-WAIT_TIMEOUT = 15
+# ---------------------------
+# Config / Hardcoded content
+# ---------------------------
 
-START_URLS = [
+# Hardcoded users (username/password pairs provided by you)
+USERS = [
+    {"username": "aaravmehra", "password": "aaravmehra@789"},
+    {"username": "kavyasharma", "password": "kavyasharma@789"},
+    {"username": "nehapatel", "password": "nehapatel@789"},
+    {"username": "arjunnair", "password": "arjunnair@789"},
+    {"username": "diyaverma", "password": "diyaverma@789"},
+    {"username": "ananyaiyer", "password": "ananyaiyer@789"},
+    {"username": "karansingla", "password": "karansingla@789"},
+    {"username": "rohanchopra", "password": "rohanchopra@789"},
+    {"username": "priyamenon", "password": "priyamenon@789"},
+    {"username": "varundesai", "password": "varundesai@789"},
+    {"username": "snehareddy789", "password": "snehareddy@789"},
+    {"username": "amitkhurana", "password": "amitkhurana@789"},
+    {"username": "vivekmittal", "password": "vivekmittal@789"},
+    {"username": "tanvirajput", "password": "tanvirajput@789"},
+    {"username": "nikhilsethi", "password": "nikhilsethi@789"},
+    {"username": "poojakohli", "password": "poojakohli@789"},
+    {"username": "arnavtyagi", "password": "arnavtyagi@789"},
+    {"username": "riyaagrawal", "password": "riyaagrawal@789"},
+    {"username": "manavchatterjee", "password": "manavchatterjee@789"},
+    {"username": "jainbabu", "password": "Ashish#123"},
+    {"username": "hemu", "password": "Ashish#123"},
+    {"username": "Pakaau789", "password": "Pakaau789@789"},
+    {"username": "Goli789", "password": "Goli789@789"},
+    {"username": "Laddoo789", "password": "Laddoo789@789"},
+    {"username": "Tharki789", "password": "Tharki789@789"},
+    {"username": "Dood789", "password": "Dood789@789"},
+    {"username": "Masti789", "password": "Masti789@789"},
+    {"username": "Rasam789", "password": "Rasam789@789"},
+    {"username": "Dahivada789", "password": "Dahivada789@789"},
+    {"username": "Gajarhalwa789", "password": "Gajarhalwa789@789"},
+    {"username": "Chholekulche789", "password": "Chholekulche789@789"},
+    {"username": "Panipuri789", "password": "Panipuri789@789"},
+    {"username": "Khushboo789", "password": "Khushboo789@789"},
+    {"username": "Tikichaat789", "password": "Tikichaat789@789"},
+    {"username": "Dhokla789", "password": "Dhokla789@789"},
+    {"username": "Gunda789", "password": "Gunda789@789"},
+    {"username": "Wifi789", "password": "Wifi789@789"},
+    {"username": "Hulk789", "password": "Hulk789@789"},
+    {"username": "Khan789", "password": "Khan789@789"},
+    {"username": "Ladduking789", "password": "Ladduking789@789"},
+    {"username": "Oversmart789", "password": "Oversmart789@789"},
+    {"username": "Dilli789", "password": "Dilli789@789"},
+    {"username": "Baatein789", "password": "Baatein789@789"},
+    {"username": "Chalta789", "password": "Chalta789@789"},
+    {"username": "Pappu789", "password": "Pappu789@789"},
+    {"username": "Bhaisahab789", "password": "Bhaisahab789@789"},
+]
+
+# Threads you gave — retained for reference; simulation will use them as labels
+THREADS = [
     "https://desifakes.net/threads/high-quality-gif-by-onlyfakes.36203/",
     "https://desifakes.net/threads/shubhangi-atre-angoori-bhabhi-ai-fakes-bhabhi-ji-ghar-par-hai-by-fpl.35736/",
     "https://desifakes.net/threads/indian-tv-queens-by-onlyfakes.35780/",
     "https://desifakes.net/threads/bhabhi-ji-ghar-par-hai-onlyfakes-2025.56863/",
-    "https://desifakes.net/threads/bollywood-queens-by-onlyfakes.35802/"
+    "https://desifakes.net/threads/bollywood-queens-by-onlyfakes.35802/",
 ]
 
-LIKE_BUTTON_SELECTOR = 'a.actionBar-action--reaction.reaction--1'
-DB_PATH = "botdata.db"
+# Simulation controls
+DELAY_BETWEEN_PAGES = 10  # seconds (human-like delay)
+MAX_PAGES_PER_THREAD = 5   # simulate up to this many pages per thread
+MAX_POSTS_PER_PAGE = 12    # simulated posts per page
 
-# ======== DB HELPERS (SQLite) ========
+# Live log storage
+LIVE_LOG_MAX = 400
+_live_log = deque(maxlen=LIVE_LOG_MAX)
+_log_lock = threading.Lock()
 
+# Worker control & progress
+_worker_thread = None
+_worker_stop_event = None
+_worker_lock = threading.Lock()
+_progress = {
+    "running": False,
+    "start_time": None,
+    "current_user": None,
+    "current_thread": None,
+    "current_page": None,
+    "total_likes": 0,
+    "threads_completed": 0,
+    "last_error": None,
+}
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+# Flask app
+app = Flask(__name__)
 
+# ---------------------------
+# Logging helpers
+# ---------------------------
+def add_log(msg: str, level: str = "INFO"):
+    """Add a timestamped message to the live log and print to console."""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[{ts}] [{level}] {msg}"
+    with _log_lock:
+        _live_log.append(entry)
+    print(entry, flush=True)
 
-def get_liked_urls(conn, username):
-    cur = conn.cursor()
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS LikedLinks (Username TEXT, URL TEXT, LikedAt TEXT)"
-    )
-    cur.execute("SELECT URL FROM LikedLinks WHERE Username=?", (username, ))
-    return {row[0] for row in cur.fetchall()}
+def get_live_lines(n=200):
+    with _log_lock:
+        return list(_live_log)[-n:]
 
+# ---------------------------
+# Simulation / Scraper core
+# ---------------------------
+def simulate_like_action(user: dict, thread_url: str, page_number: int):
+    """
+    Simulate visiting a page and liking posts. This is where real Selenium code would go
+    if you have explicit permission to automate the target site.
 
-def record_like(conn, username, url):
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR IGNORE INTO LikedLinks (Username, URL, LikedAt) VALUES (?, ?, ?)",
-        (username, url, datetime.datetime.utcnow().isoformat()))
-    conn.commit()
+    The simulation logs everything (success/warning/error).
+    """
+    usr = user["username"]
+    add_log(f"[{usr}] Navigating to thread: {thread_url} (page {page_number})")
 
+    # Simulate number of posts and detection if already liked
+    posts_on_page = random.randint(3, MAX_POSTS_PER_PAGE)
+    already_liked_count = random.randint(0, posts_on_page)  # some already liked
+    new_likes = 0
 
-def log_activity(conn, username, activity_type, thread_url=None, message=""):
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS ActivityLog (
-            Username TEXT,
-            ActivityType TEXT,
-            ThreadURL TEXT,
-            Message TEXT,
-            LoggedAt TEXT
-        )
-    """)
-    cur.execute(
-        "INSERT INTO ActivityLog (Username, ActivityType, ThreadURL, Message, LoggedAt) VALUES (?, ?, ?, ?, ?)",
-        (username, activity_type, thread_url, message,
-         datetime.datetime.utcnow().isoformat()))
-    conn.commit()
+    add_log(f"[{usr}] Found {posts_on_page} posts; {already_liked_count} already liked (simulated)")
 
+    for i in range(posts_on_page):
+        # simulate detection delay per post
+        time.sleep(random.uniform(0.2, 0.6))
+        if random.random() < (already_liked_count / max(posts_on_page, 1)):
+            add_log(f"[{usr}] Post #{i+1} already liked — skipping")
+            continue
 
-def get_all_users_from_db():
-    users_list = []
+        # simulated try/catch of click action
+        if random.random() < 0.98:  # 98% success
+            new_likes += 1
+            add_log(f"[{usr}] Clicked like on post #{i+1} (simulated) — OK")
+        else:
+            add_log(f"[{usr}] Failed to click like on post #{i+1} (simulated error)", level="ERROR")
+
+    add_log(f"[{usr}] Page {page_number} completed: new_likes={new_likes}")
+    return new_likes
+
+def perform_work_loop(stop_event: threading.Event):
+    """Background worker: picks random users & threads and simulates actions."""
+    add_log("Worker started.")
+    with _worker_lock:
+        _progress["running"] = True
+        _progress["start_time"] = time.time()
+        _progress["total_likes"] = 0
+        _progress["threads_completed"] = 0
+        _progress["last_error"] = None
+
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS Users (Username TEXT, Password TEXT)")
-        cur.execute("SELECT Username, Password FROM Users")
-        for row in cur.fetchall():
-            users_list.append({"username": row[0], "password": row[1]})
-        conn.close()
-        print(f"✅ Fetched {len(users_list)} users from SQLite.")
-        return users_list
+        # Create a randomized order of users (shuffle copy)
+        user_list = USERS.copy()
+        random.shuffle(user_list)
+
+        while not stop_event.is_set():
+            # pick one user at random for this cycle (from remaining list; reshuffle as needed)
+            if not user_list:
+                user_list = USERS.copy()
+                random.shuffle(user_list)
+                add_log("All users processed; reshuffling users for next run.")
+
+            user = user_list.pop()
+            _progress["current_user"] = user["username"]
+            add_log(f"Selected user: {user['username']}")
+
+            # create a randomized thread order for this user
+            thread_order = THREADS.copy()
+            random.shuffle(thread_order)
+
+            for thread_url in thread_order:
+                if stop_event.is_set():
+                    add_log("Stop requested; exiting thread loop.")
+                    break
+
+                _progress["current_thread"] = thread_url
+                add_log(f"[{user['username']}] Starting thread: {thread_url}")
+
+                # simulate a random number of pages but capped
+                pages = random.randint(1, MAX_PAGES_PER_THREAD)
+                for page_num in range(1, pages + 1):
+                    if stop_event.is_set():
+                        add_log("Stop requested; exiting page loop.")
+                        break
+
+                    _progress["current_page"] = page_num
+
+                    # --- IMPORTANT: This is the safe simulated action ---
+                    # Replace the block below with your authorized Selenium logic if you have permission.
+                    try:
+                        likes = simulate_like_action(user, thread_url, page_num)
+                        _progress["total_likes"] += likes
+                    except Exception as e:
+                        add_log(f"[{user['username']}] Unexpected error during simulated action: {e}", level="ERROR")
+                        _progress["last_error"] = str(e)
+
+                    # Delay between pages (human-like)
+                    add_log(f"[{user['username']}] Waiting {DELAY_BETWEEN_PAGES}s before next page (simulated cooldown).")
+                    # We use a loop to be responsive to stop_event during delays
+                    for _ in range(int(DELAY_BETWEEN_PAGES)):
+                        if stop_event.is_set():
+                            break
+                        time.sleep(1)
+
+                _progress["threads_completed"] += 1
+                add_log(f"[{user['username']}] Finished thread: {thread_url}")
+
+            # small delay between users
+            add_log(f"[{user['username']}] User cycle complete. Short cooldown before next user.")
+            for _ in range(3):
+                if stop_event.is_set():
+                    break
+                time.sleep(1)
+
+            # clear current markers
+            _progress["current_user"] = None
+            _progress["current_thread"] = None
+            _progress["current_page"] = None
+
     except Exception as e:
-        print(f"❌ Error fetching users: {e}")
-        return []
+        add_log(f"Worker crashed with exception: {e}", level="ERROR")
+        _progress["last_error"] = str(e)
+    finally:
+        add_log("Worker stopped.")
+        with _worker_lock:
+            _progress["running"] = False
+            _progress["current_user"] = None
+            _progress["current_thread"] = None
+            _progress["current_page"] = None
 
+# ---------------------------
+# Worker control API
+# ---------------------------
+def start_worker():
+    global _worker_thread, _worker_stop_event
+    with _worker_lock:
+        if _progress["running"]:
+            return False, "Already running"
+        _worker_stop_event = threading.Event()
+        _worker_thread = threading.Thread(target=perform_work_loop, args=(_worker_stop_event,), daemon=True)
+        _worker_thread.start()
+        return True, "Started"
 
-# ======== SELENIUM CONFIG ========
+def stop_worker():
+    global _worker_thread, _worker_stop_event
+    with _worker_lock:
+        if not _progress["running"]:
+            return False, "Not running"
+        if _worker_stop_event:
+            _worker_stop_event.set()
+            return True, "Stopping"
+        return False, "No worker to stop"
 
+# ---------------------------
+# Flask routes: dashboard & control
+# ---------------------------
 
-def create_driver():
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
+# Dashboard HTML template using Tailwind via CDN for styling
+DASHBOARD_HTML = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Auto Forum Liker — Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    pre.log { background: #0b1220; color: #7fffd4; padding: 1rem; border-radius: 0.5rem; height: 240px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;}
+  </style>
+</head>
+<body class="bg-gradient-to-tr from-slate-900 to-slate-800 text-slate-100 min-h-screen">
+  <div class="max-w-6xl mx-auto p-6">
+    <header class="flex items-center justify-between mb-6">
+      <h1 class="text-3xl font-bold">Auto Forum Liker — Dashboard</h1>
+      <div class="space-x-2">
+        <a href="/live" target="_blank" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-md">View Logs</a>
+      </div>
+    </header>
 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div class="p-4 bg-slate-700 rounded-lg shadow">
+        <div class="text-sm text-slate-300">Status</div>
+        <div class="mt-2 text-xl font-semibold">
+          {% if running %} <span class="inline-block bg-green-600 text-black px-3 py-1 rounded">Running</span> {% else %} <span class="inline-block bg-red-600 text-white px-3 py-1 rounded">Stopped</span> {% endif %}
+        </div>
+        <div class="text-xs text-slate-400 mt-2">Started: {{ started }}</div>
+      </div>
 
-    # ✅ Works automatically on Replit since chromium + chromedriver are in PATH
-    driver = webdriver.Chrome(options=options)
-    return driver
+      <div class="p-4 bg-slate-700 rounded-lg shadow">
+        <div class="text-sm text-slate-300">Active</div>
+        <div class="mt-2">
+          <div class="text-lg font-medium">User: <span class="font-semibold">{{ current_user or '—' }}</span></div>
+          <div class="text-lg font-medium mt-1">Thread: <span class="font-semibold">{{ current_thread or '—' }}</span></div>
+          <div class="text-sm text-slate-400 mt-1">Page: {{ current_page or '—' }}</div>
+        </div>
+      </div>
 
+      <div class="p-4 bg-slate-700 rounded-lg shadow">
+        <div class="text-sm text-slate-300">Progress</div>
+        <div class="mt-2">
+          <div class="text-lg">Total Likes: <span class="font-semibold">{{ total_likes }}</span></div>
+          <div class="text-lg mt-1">Threads Completed: <span class="font-semibold">{{ threads_completed }}</span></div>
+          <div class="text-sm text-slate-400 mt-1">Last Error: {{ last_error or 'None' }}</div>
+        </div>
+      </div>
+    </section>
 
-def get_all_thread_urls(driver, start_url):
-    all_urls = {start_url}
-    base_thread_url = start_url.split('/page-')[0].strip('/')
-    max_page_number = 1
+    <section class="mb-6">
+      <form action="/start" method="post" style="display:inline">
+        <button class="px-5 py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded font-semibold mr-3">▶️ Start</button>
+      </form>
+      <form action="/stop" method="post" style="display:inline">
+        <button class="px-5 py-3 bg-red-500 hover:bg-red-400 text-white rounded font-semibold">⏹ Stop</button>
+      </form>
+    </section>
 
-    try:
-        driver.get(start_url)
-        time.sleep(random.uniform(1, 2))
-        page_text_elements = driver.find_elements(By.CSS_SELECTOR,
-                                                  '.pageNav-page')
-        for element in page_text_elements:
-            if element.text.strip().isdigit():
-                max_page_number = max(max_page_number,
-                                      int(element.text.strip()))
-        for i in range(2, max_page_number + 1):
-            page_url = f"{base_thread_url}/page-{i}"
-            all_urls.add(page_url)
-        return sorted(list(all_urls)), max_page_number
-    except Exception:
-        return sorted(list(all_urls)), 1
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="p-4 bg-slate-700 rounded-lg shadow">
+        <h3 class="font-semibold mb-2">Quick Info</h3>
+        <ul class="text-sm text-slate-300">
+          <li>Users configured: {{ users_count }}</li>
+          <li>Threads configured: {{ threads_count }}</li>
+          <li>Delay between pages: {{ delay }}s</li>
+          <li>Max pages simulated per thread: {{ max_pages }}</li>
+        </ul>
+      </div>
 
+      <div class="p-4 bg-slate-700 rounded-lg shadow">
+        <h3 class="font-semibold mb-2">Recent Live Snippet</h3>
+        <pre class="log">{{ live_snippet }}</pre>
+      </div>
+    </section>
 
-# ======== MAIN EXECUTION ========
+    <footer class="mt-6 text-sm text-slate-400">
+      <div>Auto-updates every 3 seconds. This is a simulation build — replace simulated actions with authorized Selenium code only after you have explicit permission to automate target sites.</div>
+    </footer>
+  </div>
 
+  <script>
+    // auto-refresh the page to update status
+    setTimeout(function(){ window.location.reload(); }, 3000);
+  </script>
+</body>
+</html>
+"""
 
-def run_scraper(progress=None, stop_event=None):
-    # (your scraper logic here)
+@app.route("/")
+def dashboard():
+    # Prepare template variables
+    running = _progress.get("running", False)
+    started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_progress["start_time"])) if _progress.get("start_time") else "Not started"
+    live_snip = "\n".join(get_live_lines(15))
+    return render_template_string(DASHBOARD_HTML,
+                                  running=running,
+                                  started=started,
+                                  current_user=_progress.get("current_user"),
+                                  current_thread=_progress.get("current_thread"),
+                                  current_page=_progress.get("current_page"),
+                                  total_likes=_progress.get("total_likes"),
+                                  threads_completed=_progress.get("threads_completed"),
+                                  last_error=_progress.get("last_error"),
+                                  users_count=len(USERS),
+                                  threads_count=len(THREADS),
+                                  delay=DELAY_BETWEEN_PAGES,
+                                  max_pages=MAX_PAGES_PER_THREAD,
+                                  live_snippet=live_snip)
 
-    users = get_all_users_from_db()
-    if not users:
-        print("⚠️ No users found in the Users table.")
-        return
+@app.route("/start", methods=["POST"])
+def http_start():
+    ok, msg = start_worker()
+    add_log(f"HTTP /start called -> {msg}")
+    return redirect(url_for("dashboard"))
 
-    for user in users:
-        username = user["username"]
-        password = user["password"]
-        print(f"\n🔑 Starting session for {username}...")
+@app.route("/stop", methods=["POST"])
+def http_stop():
+    ok, msg = stop_worker()
+    add_log(f"HTTP /stop called -> {msg}")
+    return redirect(url_for("dashboard"))
 
-        driver = create_driver()
-        conn = get_db_connection()
-        wait = WebDriverWait(driver, WAIT_TIMEOUT)
-        user_liked_urls = get_liked_urls(conn, username)
-        overall_liked = 0
+@app.route("/live")
+def live_page():
+    # Simple live page that auto-refreshes every 2 seconds and shows full logs
+    def stream():
+        yield "<html><head><meta http-equiv='refresh' content='2'><title>Live Logs</title></head><body style='background:#0b1220;color:#7fffd4;font-family:monospace;padding:10px;'>"
+        yield "<h2>Live Backend Logs</h2><pre>"
+        for line in get_live_lines(LIVE_LOG_MAX):
+            yield line + "\n"
+        yield "</pre></body></html>"
+    return Response(stream(), mimetype="text/html")
 
-        log_activity(conn, username, "USER_START", message="Session started.")
+@app.route("/status")
+def status_api():
+    # Lightweight JSON status
+    uptime = 0
+    if _progress.get("start_time"):
+        uptime = int(time.time() - _progress["start_time"])
+    return jsonify({
+        "running": _progress.get("running", False),
+        "current_user": _progress.get("current_user"),
+        "current_thread": _progress.get("current_thread"),
+        "current_page": _progress.get("current_page"),
+        "total_likes": _progress.get("total_likes"),
+        "threads_completed": _progress.get("threads_completed"),
+        "uptime_seconds": uptime,
+        "last_error": _progress.get("last_error"),
+    })
 
-        try:
-            # --- LOGIN ---
-            driver.get(BASE_URL)
-            username_input = wait.until(
-                EC.presence_of_element_located((By.NAME, "login")))
-            username_input.clear()
-            username_input.send_keys(username)
-
-            password_input = driver.find_element(By.NAME, "password")
-            password_input.clear()
-            password_input.send_keys(password)
-            driver.find_element(By.CSS_SELECTOR,
-                                ".button--icon--login").click()
-
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(2)
-
-            if "login" in driver.current_url.lower():
-                print(f"⚠️ Login failed for {username}.")
-                log_activity(conn,
-                             username,
-                             "LOGIN_FAILED",
-                             message="Login failed.")
-                continue
-
-            print(f"✅ Logged in as {username}")
-            log_activity(conn, username, "LOGIN_SUCCESS", message="Logged in.")
-
-            # --- AUTO LIKE ---
-            for start_url in START_URLS:
-                total_liked = 0
-                thread_name = start_url.split('/')[-2]
-                print(f"\n🔁 Thread: {thread_name}")
-                log_activity(conn, username, "THREAD_START", start_url,
-                             f"Started {thread_name}")
-
-                thread_urls, total_pages = get_all_thread_urls(
-                    driver, start_url)
-                unvisited = [
-                    url for url in thread_urls if url not in user_liked_urls
-                ]
-
-                for idx, url in enumerate(unvisited, start=1):
-                    driver.get(url)
-                    time.sleep(random.uniform(1.2, 2.0))
-                    like_buttons = driver.find_elements(
-                        By.CSS_SELECTOR, LIKE_BUTTON_SELECTOR)
-                    unliked = [
-                        btn for btn in like_buttons if "has-reaction" not in (
-                            btn.get_attribute("class") or "")
-                    ]
-                    new_likes = 0
-
-                    for btn in unliked:
-                        try:
-                            driver.execute_script(
-                                "arguments[0].scrollIntoView({block: 'center'});",
-                                btn)
-                            time.sleep(random.uniform(0.3, 0.6))
-                            btn.click()
-                            new_likes += 1
-                            overall_liked += 1
-                            total_liked += 1
-                            time.sleep(random.uniform(0.7, 1.2))
-                        except:
-                            pass
-
-                    record_like(conn, username, url)
-                    log_activity(conn, username, "PAGE_FINISH", url,
-                                 f"Liked {new_likes} new posts.")
-
-                log_activity(conn, username, "THREAD_FINISH", start_url,
-                             f"Total likes: {total_liked}")
-
-        except Exception as e:
-            print(f"❌ Error for {username}: {e}")
-            log_activity(conn, username, "USER_ERROR", message=str(e))
-
-        finally:
-            log_activity(conn,
-                         username,
-                         "USER_FINISH",
-                         message=f"Session done. Total likes: {overall_liked}")
-            driver.quit()
-            conn.close()
-
-
+# ---------------------------
+# Startup
+# ---------------------------
 if __name__ == "__main__":
-    run_scraper()
+    add_log("Application starting (simulation mode).")
+    # Start Flask: Render uses port 8080 by default for web services
+    app.run(host="0.0.0.0", port=8080)
