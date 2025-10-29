@@ -12,7 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from scraper import run_scraper
 
 DB_PATH = "botdata.db"
-TELEGRAM_TOKEN = os.getenv("8379824269:AAFNf9RsAHc2E2gIGHokPSsF-oDFwiJK0lo")
+TELEGRAM_TOKEN = "8379824269:AAFNf9RsAHc2E2gIGHokPSsF-oDFwiJK0lo"
 
 if not TELEGRAM_TOKEN:
     print("❌ TELEGRAM_BOT_TOKEN missing in secrets!")
