@@ -1,39 +1,35 @@
+from flask import Flask
 import threading
 import subprocess
-from flask import Flask
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ AutoLikerScraper is running — Flask + Telegram bot active!"
+    print("✅ [FLASK] AutoLikerScraper Flask route hit!")
+    return "✅ AutoLikerScraper is running!", 200
 
 @app.route('/ping')
 def ping():
-    print("⏰ Ping received on AutoLikerScraper!")
-    return "Ping received successfully!", 200
+    print("⏰ [FLASK] Ping received on AutoLikerScraper!")
+    return "Pong! AutoLikerScraper alive.", 200
 
 def run_bot():
-    process = subprocess.Popen(
-        ["python", "telegram_bot.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-    for line in process.stdout:
-        print(f"[BOT] {line}", end="")
+    print("🤖 [BOT] Starting telegram_bot.py...")
+    try:
+        subprocess.run(["python", "telegram_bot.py"], check=True)
+    except Exception as e:
+        print(f"❌ [BOT] Failed to start telegram_bot.py: {e}")
 
 def run_scraper():
-    process = subprocess.Popen(
-        ["python", "scraper.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-    for line in process.stdout:
-        print(f"[SCRAPER] {line}", end="")
+    print("🧠 [SCRAPER] Starting scraper.py...")
+    try:
+        subprocess.run(["python", "scraper.py"], check=True)
+    except Exception as e:
+        print(f"❌ [SCRAPER] Failed to start scraper.py: {e}")
 
 if __name__ == "__main__":
+    print("🚀 [MAIN] Starting Flask + Bot + Scraper threads...")
     threading.Thread(target=run_bot, daemon=True).start()
     threading.Thread(target=run_scraper, daemon=True).start()
     app.run(host="0.0.0.0", port=8080)
