@@ -3,3 +3,4 @@ requests
 selenium
 python-telegram-bot
 nest_asyncio
+webdriver-manager
