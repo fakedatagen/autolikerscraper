@@ -1,24 +1,34 @@
-import random
-import time
+#!/usr/bin/env python3
+# scraper.py
+# Single-file Flask app with a stylish dashboard and Selenium-based scraper.
+#
+# - /         -> Dashboard (Tailwind-styled)
+# - /start    -> Start background worker (POST)
+# - /stop     -> Stop background worker (POST)
+# - /live     -> Full live backend logs (auto-refresh)
+# - /status   -> JSON status API
+#
+# This version uses Selenium to perform real scraping and liking activity.
+# Deploy-ready for Render on port 8080.
+
+from flask import Flask, render_template_string, redirect, url_for, Response, jsonify, request
 import threading
-from flask import Flask, render_template, request
+import time
+import datetime
+import random
+from collections import deque
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException
-from datetime import datetime, timedelta
-from collections import deque
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
-# ========= CONFIG =========
-app = Flask(__name__)
+# -----------------------
+# Hardcoded configuration
+# -----------------------
 
-BASE_URL = "https://desifakes.net/login"
-WAIT_TIMEOUT = 15
-LIKE_BUTTON_SELECTOR = 'a.actionBar-action--reaction.reaction--1'
-
-# Hardcoded user credentials
+# USERS (hardcoded username:password pairs as provided)
 USERS = [
     {"username": "aaravmehra", "password": "aaravmehra@789"},
     {"username": "kavyasharma", "password": "kavyasharma@789"},
@@ -65,33 +75,66 @@ USERS = [
     {"username": "Baatein789", "password": "Baatein789@789"},
     {"username": "Chalta789", "password": "Chalta789@789"},
     {"username": "Pappu789", "password": "Pappu789@789"},
-    {"username": "Bhaisahab789", "password": "Bhaisahab789@789"}
+    {"username": "Bhaisahab789", "password": "Bhaisahab789@789"},
 ]
 
-# Hardcoded thread URLs
-START_URLS = [
+# THREADS (provided list of URLs)
+THREADS = [
     "https://desifakes.net/threads/high-quality-gif-by-onlyfakes.36203/",
     "https://desifakes.net/threads/shubhangi-atre-angoori-bhabhi-ai-fakes-bhabhi-ji-ghar-par-hai-by-fpl.35736/",
     "https://desifakes.net/threads/indian-tv-queens-by-onlyfakes.35780/",
     "https://desifakes.net/threads/bhabhi-ji-ghar-par-hai-onlyfakes-2025.56863/",
-    "https://desifakes.net/threads/bollywood-queens-by-onlyfakes.35802/"
+    "https://desifakes.net/threads/bollywood-queens-by-onlyfakes.35802/",
 ]
 
-# Global state for UI and control
-state = {
-    "is_running": False,
-    "current_user": "None",
-    "current_thread": "None",
-    "current_page": 0,
-    "total_likes": 0,
-    "start_time": None,
-    "threads_completed": 0,
-    "liked_urls": {}  # Store liked URLs per user
-}
-logs = deque(maxlen=200)  # Keep last 200 log messages
-stop_event = threading.Event()
+# Configuration
+BASE_URL = "https://desifakes.net/login"
+LIKE_BUTTON_SELECTOR = 'a.actionBar-action--reaction.reaction--1'
+WAIT_TIMEOUT = 15
+DELAY_BETWEEN_THREADS = 10  # seconds between threads
+LIVE_LOG_MAX = 200  # keep last N log lines in memory
 
-# ========= SELENIUM CONFIG =========
+# -----------------------
+# Internal runtime state
+# -----------------------
+_live_log = deque(maxlen=LIVE_LOG_MAX)
+_log_lock = threading.Lock()
+
+_worker_thread = None
+_worker_stop_event = None
+_worker_lock = threading.Lock()
+
+_progress = {
+    "running": False,
+    "start_time": None,
+    "current_user": None,
+    "current_thread": None,
+    "current_page": None,
+    "total_likes": 0,
+    "threads_completed": 0,
+    "last_error": None,
+}
+
+app = Flask(__name__)
+
+# -----------------------
+# Logging helpers
+# -----------------------
+def add_log(message: str, level: str = "INFO"):
+    """Add timestamped message to live log and print to stdout."""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[{ts}] [{level}] {message}"
+    with _log_lock:
+        _live_log.append(entry)
+    print(entry, flush=True)
+
+def get_live_lines(n: int = 200):
+    with _log_lock:
+        return list(_live_log)[-n:]
+
+# -----------------------
+# Selenium setup
+# -----------------------
 def create_driver():
     options = Options()
     options.add_argument("--headless")
@@ -106,6 +149,7 @@ def get_all_thread_urls(driver, start_url):
     all_urls = {start_url}
     base_thread_url = start_url.split('/page-')[0].strip('/')
     max_page_number = 1
+
     try:
         driver.get(start_url)
         time.sleep(random.uniform(1, 2))
@@ -118,222 +162,364 @@ def get_all_thread_urls(driver, start_url):
             all_urls.add(page_url)
         return sorted(list(all_urls)), max_page_number
     except Exception as e:
-        log_message(f"❌ Error fetching thread pages for {start_url}: {str(e)}")
+        add_log(f"Error fetching thread pages for {start_url}: {e}", level="ERROR")
         return sorted(list(all_urls)), 1
 
-# ========= LOGGING =========
-def log_message(message):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    logs.append(f"[{timestamp}] {message}")
-    print(message)
+def like_page(driver, user: dict, thread_url: str, page_num: int):
+    """Visit a thread page and attempt to like unliked posts. Returns number of new likes."""
+    username = user["username"]
+    add_log(f"[{username}] Opening thread page {page_num} -> {thread_url}")
+    wait = WebDriverWait(driver, WAIT_TIMEOUT)
 
-# ========= SCRAPER LOGIC =========
-def run_scraper():
-    state["is_running"] = True
-    state["start_time"] = datetime.now()
-    log_message("🚀 Scraper started!")
+    try:
+        driver.get(thread_url)
+        time.sleep(random.uniform(1.2, 2.0))
+        like_buttons = driver.find_elements(By.CSS_SELECTOR, LIKE_BUTTON_SELECTOR)
+        unliked = [
+            btn for btn in like_buttons if "has-reaction" not in (btn.get_attribute("class") or "")
+        ]
+        new_likes = 0
 
-    while not stop_event.is_set():
-        # Randomly select a user
-        user = random.choice(USERS)
-        username = user["username"]
-        password = user["password"]
-        if username not in state["liked_urls"]:
-            state["liked_urls"][username] = set()
-        user_liked_urls = state["liked_urls"][username]
-        state["current_user"] = username
-        log_message(f"🔑 Starting session for {username}...")
+        add_log(f"[{username}] Detected {len(like_buttons)} posts, {len(unliked)} unliked.")
+        for btn in unliked:
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                time.sleep(random.uniform(0.3, 0.6))
+                btn.click()
+                new_likes += 1
+                add_log(f"[{username}] Clicked like on post — SUCCESS")
+                time.sleep(random.uniform(0.7, 1.2))
+            except Exception as e:
+                add_log(f"[{username}] Error clicking like on post: {e}", level="ERROR")
 
-        driver = create_driver()
-        wait = WebDriverWait(driver, WAIT_TIMEOUT)
-        overall_liked = 0
+        add_log(f"[{username}] Page {page_num} done. New likes on page: {new_likes}")
+        return new_likes
+    except Exception as e:
+        add_log(f"[{username}] Error processing page {page_num}: {e}", level="ERROR")
+        return 0
 
-        try:
+# -----------------------
+# Worker function
+# -----------------------
+def worker_loop(stop_event: threading.Event):
+    """Main background worker: picks random users and threads, processes pages, logs everything."""
+    add_log("Worker starting...")
+    with _worker_lock:
+        _progress["running"] = True
+        _progress["start_time"] = time.time()
+        _progress["total_likes"] = 0
+        _progress["threads_completed"] = 0
+        _progress["last_error"] = None
+
+    try:
+        while not stop_event.is_set():
+            user_pool = USERS.copy()
+            random.shuffle(user_pool)
+            if not user_pool:
+                add_log("All users processed — reshuffling user pool for another run.")
+                continue
+
+            user = user_pool.pop()
+            username = user["username"]
+            password = user["password"]
+            add_log(f"Selected user: {username}")
+            _progress["current_user"] = username
+
+            driver = create_driver()
+            wait = WebDriverWait(driver, WAIT_TIMEOUT)
+
             # Login
-            driver.get(BASE_URL)
-            username_input = wait.until(EC.presence_of_element_located((By.NAME, "login")))
-            username_input.clear()
-            username_input.send_keys(username)
-            password_input = driver.find_element(By.NAME, "password")
-            password_input.clear()
-            password_input.send_keys(password)
-            driver.find_element(By.CSS_SELECTOR, ".button--icon--login").click()
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(2)
+            try:
+                add_log(f"[{username}] Attempting login...")
+                driver.get(BASE_URL)
+                username_input = wait.until(EC.presence_of_element_located((By.NAME, "login")))
+                username_input.clear()
+                username_input.send_keys(username)
+                password_input = driver.find_element(By.NAME, "password")
+                password_input.clear()
+                password_input.send_keys(password)
+                driver.find_element(By.CSS_SELECTOR, ".button--icon--login").click()
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                time.sleep(2)
 
-            if "login" in driver.current_url.lower():
-                log_message(f"⚠️ Login failed for {username}.")
+                if "login" in driver.current_url.lower():
+                    add_log(f"[{username}] Login failed.", level="ERROR")
+                    _progress["last_error"] = "Login failed"
+                    driver.quit()
+                    continue
+                add_log(f"[{username}] Logged in successfully.")
+            except Exception as e:
+                add_log(f"[{username}] Login error: {e}", level="ERROR")
+                _progress["last_error"] = str(e)
                 driver.quit()
                 continue
 
-            log_message(f"✅ Logged in as {username}")
-
-            # Randomly select a thread
-            thread_url = random.choice(START_URLS)
-            state["current_thread"] = thread_url.split('/')[-2]
-            log_message(f"🔁 Processing thread: {state['current_thread']}")
-
-            thread_urls, total_pages = get_all_thread_urls(driver, thread_url)
-            unvisited = [url for url in thread_urls if url not in user_liked_urls]
-
-            for idx, url in enumerate(unvisited, start=1):
+            # Process threads randomly
+            thread_pool = THREADS.copy()
+            random.shuffle(thread_pool)
+            for thread_url in thread_pool:
                 if stop_event.is_set():
+                    add_log("Stop requested — breaking thread loop.")
                     break
-                state["current_page"] = idx
-                driver.get(url)
-                log_message(f"📄 Visiting page {idx} of {state['current_thread']}")
-                time.sleep(random.uniform(1.2, 2.0))
-                like_buttons = driver.find_elements(By.CSS_SELECTOR, LIKE_BUTTON_SELECTOR)
-                unliked = [btn for btn in like_buttons if "has-reaction" not in (btn.get_attribute("class") or "")]
-                new_likes = 0
 
-                for btn in unliked:
+                _progress["current_thread"] = thread_url
+                add_log(f"[{username}] Starting thread: {thread_url}")
+
+                thread_urls, total_pages = get_all_thread_urls(driver, thread_url)
+                add_log(f"[{username}] Found {total_pages} pages for thread.")
+
+                for idx, page_url in enumerate(thread_urls, start=1):
+                    if stop_event.is_set():
+                        add_log("Stop requested — breaking page loop.")
+                        break
+
+                    _progress["current_page"] = idx
+                    likes = like_page(driver, user, page_url, idx)
+                    _progress["total_likes"] += likes
+
+                    # Delay between pages
+                    add_log(f"[{username}] Sleeping before next page.")
+                    for _ in range(5):
+                        if stop_event.is_set():
+                            break
+                        time.sleep(1)
+
+                _progress["threads_completed"] += 1
+                add_log(f"[{username}] Finished thread: {thread_url}")
+
+                # Delay between threads
+                add_log(f"[{username}] Sleeping {DELAY_BETWEEN_THREADS}s before next thread.")
+                for _ in range(DELAY_BETWEEN_THREADS):
                     if stop_event.is_set():
                         break
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                        time.sleep(random.uniform(0.3, 0.6))
-                        btn.click()
-                        new_likes += 1
-                        overall_liked += 1
-                        state["total_likes"] += 1
-                        time.sleep(random.uniform(0.7, 1.2))
-                    except Exception as e:
-                        log_message(f"❌ Error clicking like: {str(e)}")
+                    time.sleep(1)
 
-                user_liked_urls.add(url)
-                log_message(f"💗 Liked {new_likes} posts on page {idx}")
-
-            state["threads_completed"] += 1
-            log_message(f"✅ Completed thread {state['current_thread']} (Total likes: {overall_liked})")
-            state["current_thread"] = "None"
-            state["current_page"] = 0
-
-        except Exception as e:
-            log_message(f"❌ Error for {username}: {str(e)}")
-
-        finally:
             driver.quit()
-            log_message(f"🏁 Session for {username} finished. Waiting 10s before next run...")
-            for _ in range(10):
+            add_log(f"[{username}] Session completed. Short cooldown before next user.")
+            for _ in range(3):
                 if stop_event.is_set():
                     break
                 time.sleep(1)
 
-    state["is_running"] = False
-    state["current_user"] = "None"
-    state["current_thread"] = "None"
-    state["current_page"] = 0
-    log_message("🛑 Scraper stopped!")
+            _progress["current_user"] = None
+            _progress["current_thread"] = None
+            _progress["current_page"] = None
 
-# ========= FLASK ROUTES =========
-@app.route('/')
+    except Exception as e:
+        add_log(f"Worker crashed with exception: {e}", level="ERROR")
+        _progress["last_error"] = str(e)
+    finally:
+        add_log("Worker exiting and cleaning up.")
+        with _worker_lock:
+            _progress["running"] = False
+            _progress["current_user"] = None
+            _progress["current_thread"] = None
+            _progress["current_page"] = None
+
+# -----------------------
+# Control helpers
+# -----------------------
+def start_worker():
+    global _worker_thread, _worker_stop_event
+    with _worker_lock:
+        if _progress.get("running"):
+            return False, "Already running"
+        _worker_stop_event = threading.Event()
+        _worker_thread = threading.Thread(target=worker_loop, args=(_worker_stop_event,), daemon=True)
+        _worker_thread.start()
+        return True, "Started"
+
+def stop_worker():
+    global _worker_stop_event
+    with _worker_lock:
+        if not _progress.get("running"):
+            return False, "Not running"
+        if _worker_stop_event:
+            _worker_stop_event.set()
+            return True, "Stopping"
+        return False, "No worker event"
+
+# -----------------------
+# Flask UI templates
+# -----------------------
+DASH_HTML = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Auto Forum Liker — Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .muted { color: #94a3b8; }
+    .card { background: rgba(15,23,42,0.6); border-radius: 12px; padding: 16px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }
+    pre.snip { background: #071024; color: #d1fae5; padding:12px; border-radius:8px; height:220px; overflow:auto; }
+  </style>
+</head>
+<body class="bg-gradient-to-tr from-slate-900 to-slate-800 text-slate-100 min-h-screen">
+  <div class="max-w-6xl mx-auto p-6">
+    <header class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-3xl font-bold">Auto Forum Liker — Dashboard</h1>
+        <p class="muted mt-1">Control and monitor the scraper</p>
+      </div>
+      <div class="space-x-2">
+        <a href="/live" target="_blank" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-md">View Logs</a>
+      </div>
+    </header>
+
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div class="card">
+        <div class="text-sm muted">Status</div>
+        <div class="mt-2">
+          {% if running %}
+            <span class="inline-block bg-green-400 text-black px-3 py-1 rounded font-bold">Running</span>
+          {% else %}
+            <span class="inline-block bg-red-500 text-white px-3 py-1 rounded font-bold">Stopped</span>
+          {% endif %}
+        </div>
+        <div class="text-xs muted mt-2">Started: {{ started }}</div>
+      </div>
+
+      <div class="card">
+        <div class="text-sm muted">Active</div>
+        <div class="mt-2 text-lg">
+          <div>User: <span class="font-semibold">{{ current_user or '—' }}</span></div>
+          <div class="mt-1">Thread: <span class="font-semibold mono" style="word-break:break-all">{{ current_thread or '—' }}</span></div>
+          <div class="mt-1 text-sm muted">Page: {{ current_page or '—' }}</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="text-sm muted">Progress</div>
+        <div class="mt-2 text-lg">
+          <div>Total Likes: <span class="font-semibold">{{ total_likes }}</span></div>
+          <div class="mt-1">Threads Completed: <span class="font-semibold">{{ threads_completed }}</span></div>
+          <div class="mt-1 text-sm muted">Last Error: {{ last_error or 'None' }}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mb-6">
+      <form action="/start" method="post" style="display:inline">
+        <button class="px-6 py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded font-semibold mr-3">▶️ Start</button>
+      </form>
+      <form action="/stop" method="post" style="display:inline">
+        <button class="px-6 py-3 bg-red-500 hover:bg-red-400 text-white rounded font-semibold">⏹ Stop</button>
+      </form>
+    </section>
+
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="card">
+        <h3 class="font-semibold mb-2">Quick Info</h3>
+        <ul class="text-sm muted space-y-1">
+          <li>Users configured: <strong>{{ users_count }}</strong></li>
+          <li>Threads configured: <strong>{{ threads_count }}</strong></li>
+          <li>Delay between threads: <strong>{{ delay }}s</strong></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold mb-2">Recent logs</h3>
+        <pre class="snip mono">{{ live_snippet }}</pre>
+      </div>
+    </section>
+
+    <footer class="mt-6 text-sm muted">
+      Auto-refresh every 3 seconds. Deploy-ready for Render.
+    </footer>
+  </div>
+
+  <script>
+    // reload every 3s to update dashboard values
+    setTimeout(()=>{ window.location.reload(); }, 3000);
+  </script>
+</body>
+</html>
+"""
+
+LIVE_HTML_HEAD = """
+<html><head><title>Live Logs</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{background:#0b1220;color:#7fffd4;font-family:monospace;padding:10px}
+pre{white-space:pre-wrap;word-break:break-word}
+</style>
+</head><body>
+<h2>Live Backend Logs</h2>
+<pre>
+"""
+
+LIVE_HTML_TAIL = """
+</pre>
+<script>
+  // reload every 2s to update logs
+  setTimeout(()=>{ window.location.reload(); }, 2000);
+</script>
+</body></html>
+"""
+
+# -----------------------
+# Flask routes
+# -----------------------
+@app.route("/", methods=["GET"])
 def dashboard():
-    runtime = "00:00:00"
-    if state["start_time"] and state["is_running"]:
-        elapsed = datetime.now() - state["start_time"]
-        runtime = str(timedelta(seconds=elapsed.seconds))
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Scraper Dashboard</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <meta http-equiv="refresh" content="3">
-    </head>
-    <body class="bg-gray-900 text-white min-h-screen p-6">
-        <div class="max-w-4xl mx-auto">
-            <h1 class="text-3xl font-bold text-center mb-6 bg-gradient-to-r from-purple-500 to-indigo-500 bg-clip-text text-transparent">Scraper Dashboard</h1>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Bot Status</h2>
-                    <p class="text-2xl font-bold {{ 'text-green-500' if state['is_running'] else 'text-red-500' }}">
-                        {{ 'Running' if state['is_running'] else 'Stopped' }}
-                    </p>
-                </div>
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Current User</h2>
-                    <p class="text-xl">{{ state['current_user'] }}</p>
-                </div>
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Current Thread</h2>
-                    <p class="text-xl">{{ state['current_thread'] }}</p>
-                </div>
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Current Page</h2>
-                    <p class="text-xl">{{ state['current_page'] }}</p>
-                </div>
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Total Likes</h2>
-                    <p class="text-xl">{{ state['total_likes'] }}</p>
-                </div>
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Runtime</h2>
-                    <p class="text-xl">{{ runtime }}</p>
-                </div>
-                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
-                    <h2 class="text-lg font-semibold mb-2">Threads Completed</h2>
-                    <p class="text-xl">{{ state['threads_completed'] }}</p>
-                </div>
-            </div>
-            <div class="flex gap-4 justify-center">
-                <form method="POST" action="/start">
-                    <button type="submit" class="px-6 py-3 bg-gradient-to-r from-green-400 to-blue-500 text-white font-bold rounded-lg shadow-md hover:from-green-500 hover:to-blue-600 disabled:opacity-50" {{ 'disabled' if state['is_running'] else '' }}>Start</button>
-                </form>
-                <form method="POST" action="/stop">
-                    <button type="submit" class="px-6 py-3 bg-gradient-to-r from-red-400 to-orange-500 text-white font-bold rounded-lg shadow-md hover:from-red-500 hover:to-orange-600 disabled:opacity-50" {{ 'disabled' if not state['is_running'] else '' }}>Stop</button>
-                </form>
-                <a href="/live" class="px-6 py-3 bg-gradient-to-r from-purple-400 to-indigo-500 text-white font-bold rounded-lg shadow-md hover:from-purple-500 hover:to-indigo-600">View Logs</a>
-            </div>
-        </div>
-    </body>
-    </html>
-    """, state=state, runtime=runtime)
+    running = _progress.get("running", False)
+    started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_progress["start_time"])) if _progress.get("start_time") else "Not started"
+    live_snip = "\n".join(get_live_lines(20))
+    return render_template_string(DASH_HTML,
+                                 running=running,
+                                 started=started,
+                                 current_user=_progress.get("current_user"),
+                                 current_thread=_progress.get("current_thread"),
+                                 current_page=_progress.get("current_page"),
+                                 total_likes=_progress.get("total_likes"),
+                                 threads_completed=_progress.get("threads_completed"),
+                                 last_error=_progress.get("last_error"),
+                                 users_count=len(USERS),
+                                 threads_count=len(THREADS),
+                                 delay=DELAY_BETWEEN_THREADS,
+                                 live_snippet=live_snip)
 
-@app.route('/live')
-def live_logs():
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Live Logs</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <meta http-equiv="refresh" content="2">
-    </head>
-    <body class="bg-gray-900 text-neon-green min-h-screen p-6">
-        <div class="max-w-4xl mx-auto">
-            <h1 class="text-3xl font-bold text-center mb-6 text-green-400">Live Logs</h1>
-            <div class="bg-gray-800 p-4 rounded-lg shadow-lg h-[70vh] overflow-y-auto font-mono text-sm text-green-300">
-                {% for log in logs %}
-                    <p>{{ log }}</p>
-                {% endfor %}
-            </div>
-            <div class="mt-4 flex justify-center">
-                <a href="/" class="px-6 py-3 bg-gradient-to-r from-purple-400 to-indigo-500 text-white font-bold rounded-lg shadow-md hover:from-purple-500 hover:to-indigo-600">Back to Dashboard</a>
-            </div>
-        </div>
-    </body>
-    </html>
-    """, logs=logs)
+@app.route("/start", methods=["POST"])
+def http_start():
+    ok, msg = start_worker()
+    add_log(f"HTTP /start called -> {msg}")
+    return redirect(url_for("dashboard"))
 
-@app.route('/start', methods=['POST'])
-def start_scraper():
-    if not state["is_running"]:
-        stop_event.clear()
-        threading.Thread(target=run_scraper, daemon=True).start()
-    return dashboard()
+@app.route("/stop", methods=["POST"])
+def http_stop():
+    ok, msg = stop_worker()
+    add_log(f"HTTP /stop called -> {msg}")
+    return redirect(url_for("dashboard"))
 
-@app.route('/stop', methods=['POST'])
-def stop_scraper():
-    if state["is_running"]:
-        stop_event.set()
-    return dashboard()
+@app.route("/live")
+def live():
+    lines = get_live_lines(LIVE_LOG_MAX)
+    content = LIVE_HTML_HEAD + "\n".join(lines) + LIVE_HTML_TAIL
+    return Response(content, mimetype="text/html")
 
-# ========= MAIN =========
+@app.route("/status")
+def status():
+    uptime = 0
+    if _progress.get("start_time"):
+        uptime = int(time.time() - _progress["start_time"])
+    return jsonify({
+        "running": _progress.get("running", False),
+        "current_user": _progress.get("current_user"),
+        "current_thread": _progress.get("current_thread"),
+        "current_page": _progress.get("current_page"),
+        "total_likes": _progress.get("total_likes"),
+        "threads_completed": _progress.get("threads_completed"),
+        "uptime_seconds": uptime,
+        "last_error": _progress.get("last_error"),
+    })
+
+# -----------------------
+# Startup
+# -----------------------
 if __name__ == "__main__":
-    log_message("🟢 App started. Access dashboard at /")
+    add_log("Application starting with Selenium integration.")
+    # Run Flask app (Render uses port 8080)
     app.run(host="0.0.0.0", port=8080)
