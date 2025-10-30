@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # scraper.py
-# Single-file Flask app with a stylish dashboard and full simulation worker.
+# Single-file Flask app with a stylish dashboard and full real Selenium worker.
 #
 # - /         -> Dashboard (Tailwind-styled)
 # - /start    -> Start background worker (POST)
@@ -8,8 +8,8 @@
 # - /live     -> Full live backend logs (auto-refresh)
 # - /status   -> JSON status API
 #
-# This version SIMULATES scraping/liking activity and logs every event.
-# Replace simulated blocks with authorized Selenium logic only when you have permission.
+# This version uses REAL Selenium logic from your original code.
+# Ensure you have permission to scrape and automate interactions on the site.
 
 from flask import Flask, render_template_string, redirect, url_for, Response, jsonify, request
 import threading
@@ -17,6 +17,12 @@ import time
 import datetime
 import random
 from collections import deque
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException
 
 # -----------------------
 # Hardcoded configuration
@@ -81,10 +87,13 @@ THREADS = [
     "https://desifakes.net/threads/bollywood-queens-by-onlyfakes.35802/",
 ]
 
-# Simulation controls (tweakable)
-DELAY_BETWEEN_PAGES = 10     # seconds between pages (human-like)
-MAX_PAGES_PER_THREAD = 6     # max pages to simulate per thread
-MAX_POSTS_PER_PAGE = 12      # simulated posts per page
+# Constants from original
+BASE_URL = "https://desifakes.net/login"
+WAIT_TIMEOUT = 15
+LIKE_BUTTON_SELECTOR = 'a.actionBar-action--reaction.reaction--1'
+DELAY_BETWEEN_THREADS = 10  # seconds between threads
+
+# Simulation controls (tweakable, but now real)
 LIVE_LOG_MAX = 800           # keep last N log lines in memory
 
 # -----------------------
@@ -127,50 +136,60 @@ def get_live_lines(n: int = 200):
         return list(_live_log)[-n:]
 
 # -----------------------
-# Simulation core (where real Selenium would be placed)
+# Selenium helpers (from your original code)
 # -----------------------
-def simulated_like_page(user: dict, thread_url: str, page_num: int):
-    """
-    Simulate visiting a thread page and trying to like posts.
-    Returns number of new likes on that page.
-    Detailed logs of all steps are written via add_log().
-    """
-    username = user["username"]
-    add_log(f"[{username}] Opening thread page {page_num} -> {thread_url}")
+def create_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(options=options)
+    return driver
 
-    # simulate number of posts and already-liked count
-    posts_on_page = random.randint(3, MAX_POSTS_PER_PAGE)
-    already_liked = random.randint(0, posts_on_page)  # random
+def get_all_thread_urls(driver, start_url):
+    all_urls = {start_url}
+    base_thread_url = start_url.split('/page-')[0].strip('/')
+    max_page_number = 1
+    try:
+        driver.get(start_url)
+        time.sleep(random.uniform(1, 2))
+        page_text_elements = driver.find_elements(By.CSS_SELECTOR, '.pageNav-page')
+        for element in page_text_elements:
+            if element.text.strip().isdigit():
+                max_page_number = max(max_page_number, int(element.text.strip()))
+        for i in range(2, max_page_number + 1):
+            page_url = f"{base_thread_url}/page-{i}"
+            all_urls.add(page_url)
+        return sorted(list(all_urls)), max_page_number
+    except Exception:
+        return sorted(list(all_urls)), 1
+
+def real_like_page(driver, user_liked_urls, url, username):
+    """Real Selenium logic to visit page and like unliked posts."""
+    driver.get(url)
+    time.sleep(random.uniform(1.2, 2.0))
+    like_buttons = driver.find_elements(By.CSS_SELECTOR, LIKE_BUTTON_SELECTOR)
+    unliked = [btn for btn in like_buttons if "has-reaction" not in (btn.get_attribute("class") or "")]
     new_likes = 0
-
-    add_log(f"[{username}] Detected {posts_on_page} posts (simulated). {already_liked} already liked.")
-
-    for i in range(1, posts_on_page + 1):
-        # small per-post processing delay and responsiveness to stop
-        for _ in range( max(1, int(random.uniform(0.2, 0.6) * 10)) ):
-            time.sleep(0.01)
-        # simulate a check whether this post is already liked
-        if random.random() < (already_liked / max(posts_on_page, 1)):
-            add_log(f"[{username}] Post #{i} already liked — skipping", level="DEBUG")
-            continue
-
-        # simulate clicking
-        if random.random() < 0.97:
+    for btn in unliked:
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            time.sleep(random.uniform(0.3, 0.6))
+            btn.click()
             new_likes += 1
-            add_log(f"[{username}] Clicked like on post #{i} — SUCCESS")
-            # small human-like delay
-            time.sleep(random.uniform(0.3, 0.9))
-        else:
-            add_log(f"[{username}] Error clicking like on post #{i} (simulated)", level="ERROR")
-
-    add_log(f"[{username}] Page {page_num} done. New likes on page: {new_likes}")
+            time.sleep(random.uniform(0.7, 1.2))
+        except:
+            pass
+    user_liked_urls.add(url)
     return new_likes
 
 # -----------------------
-# Worker function
+# Worker function (integrated real logic)
 # -----------------------
 def worker_loop(stop_event: threading.Event):
-    """Main background worker: picks random users and threads, processes pages, logs everything."""
+    """Main background worker: picks random users and threads, processes pages with real Selenium."""
     add_log("Worker starting...")
     with _worker_lock:
         _progress["running"] = True
@@ -190,54 +209,81 @@ def worker_loop(stop_event: threading.Event):
                 add_log("All users processed once — reshuffling user pool for another run.")
 
             user = user_pool.pop()
-            add_log(f"Selected user: {user['username']}")
-            _progress["current_user"] = user["username"]
+            username = user["username"]
+            add_log(f"Selected user: {username}")
+            _progress["current_user"] = username
 
-            # shuffle threads for this user
-            thread_pool = THREADS.copy()
-            random.shuffle(thread_pool)
+            driver = create_driver()
+            wait = WebDriverWait(driver, WAIT_TIMEOUT)
+            user_liked_urls = set()  # In-memory per user session
 
-            for thread_url in thread_pool:
-                if stop_event.is_set():
-                    add_log("Stop requested — breaking thread loop.")
-                    break
+            try:
+                # Login
+                driver.get(BASE_URL)
+                username_input = wait.until(EC.presence_of_element_located((By.NAME, "login")))
+                username_input.clear()
+                username_input.send_keys(username)
+                password_input = driver.find_element(By.NAME, "password")
+                password_input.clear()
+                password_input.send_keys(user["password"])
+                driver.find_element(By.CSS_SELECTOR, ".button--icon--login").click()
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                time.sleep(2)
+                if "login" in driver.current_url.lower():
+                    add_log(f"Login failed for {username}.", level="ERROR")
+                    continue
+                add_log(f"Logged in as {username}.")
 
-                _progress["current_thread"] = thread_url
-                add_log(f"[{user['username']}] Starting thread: {thread_url}")
+                # shuffle threads for this user
+                thread_pool = THREADS.copy()
+                random.shuffle(thread_pool)
 
-                pages_to_visit = random.randint(1, MAX_PAGES_PER_THREAD)
-                for page_num in range(1, pages_to_visit + 1):
+                for thread_url in thread_pool:
                     if stop_event.is_set():
-                        add_log("Stop requested — breaking page loop.")
+                        add_log("Stop requested — breaking thread loop.")
                         break
 
-                    _progress["current_page"] = page_num
+                    _progress["current_thread"] = thread_url.split('/')[-2]
+                    add_log(f"[{username}] Starting thread: {thread_url}")
 
-                    # === HERE you would insert your real Selenium action if authorized ===
-                    # For simulation we call simulated_like_page which creates detailed logs.
-                    try:
-                        likes = simulated_like_page(user, thread_url, page_num)
-                        _progress["total_likes"] = _progress.get("total_likes", 0) + likes
-                    except Exception as e:
-                        add_log(f"[{user['username']}] Exception during page work: {e}", level="ERROR")
-                        _progress["last_error"] = str(e)
+                    thread_urls, total_pages = get_all_thread_urls(driver, thread_url)
+                    unvisited = [url for url in thread_urls if url not in user_liked_urls]
 
-                    # wait between pages with early-stop responsiveness
-                    add_log(f"[{user['username']}] Sleeping {DELAY_BETWEEN_PAGES}s before next page (simulated cooldown).")
-                    for _ in range(DELAY_BETWEEN_PAGES):
+                    total_liked = 0
+                    for idx, url in enumerate(unvisited, start=1):
                         if stop_event.is_set():
+                            add_log("Stop requested — breaking page loop.")
                             break
-                        time.sleep(1)
 
-                _progress["threads_completed"] = _progress.get("threads_completed", 0) + 1
-                add_log(f"[{user['username']}] Finished thread: {thread_url}")
+                        _progress["current_page"] = idx
 
-            # small pause between users
-            add_log(f"[{user['username']}] Completed user cycle. Short cooldown.")
-            for _ in range(3):
-                if stop_event.is_set():
-                    break
-                time.sleep(1)
+                        try:
+                            likes = real_like_page(driver, user_liked_urls, url, username)
+                            _progress["total_likes"] += likes
+                            total_liked += likes
+                            add_log(f"[{username}] Page {idx}/{len(unvisited)}: Liked {likes} new posts.")
+                        except Exception as e:
+                            add_log(f"[{username}] Exception on page {url}: {e}", level="ERROR")
+                            _progress["last_error"] = str(e)
+
+                        # wait between pages
+                        for _ in range(DELAY_BETWEEN_THREADS):
+                            if stop_event.is_set():
+                                break
+                            time.sleep(1)
+
+                    _progress["threads_completed"] += 1
+                    add_log(f"[{username}] Finished thread: {thread_url} - Total likes: {total_liked}")
+
+                # small pause between users
+                add_log(f"[{username}] Completed user cycle. Short cooldown.")
+                for _ in range(3):
+                    if stop_event.is_set():
+                        break
+                    time.sleep(1)
+
+            finally:
+                driver.quit()
 
             # clear per-cycle markers
             _progress["current_user"] = None
@@ -302,7 +348,7 @@ DASH_HTML = """
     <header class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-3xl font-bold">Auto Forum Liker — Dashboard</h1>
-        <p class="muted mt-1">Control and monitor the scraper (simulation mode)</p>
+        <p class="muted mt-1">Control and monitor the scraper (real Selenium mode)</p>
       </div>
       <div class="space-x-2">
         <a href="/live" target="_blank" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-md">View Logs</a>
@@ -351,114 +397,4 @@ DASH_HTML = """
     </section>
 
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="card">
-        <h3 class="font-semibold mb-2">Quick Info</h3>
-        <ul class="text-sm muted space-y-1">
-          <li>Users configured: <strong>{{ users_count }}</strong></li>
-          <li>Threads configured: <strong>{{ threads_count }}</strong></li>
-          <li>Delay between pages: <strong>{{ delay }}s</strong></li>
-          <li>Max pages per thread: <strong>{{ max_pages }}</strong></li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <h3 class="font-semibold mb-2">Recent logs</h3>
-        <pre class="snip mono">{{ live_snippet }}</pre>
-      </div>
-    </section>
-
-    <footer class="mt-6 text-sm muted">
-      Auto-refresh every 3 seconds. This app is running in simulation mode. Replace the simulation with authorized Selenium steps only after you have permission.
-    </footer>
-  </div>
-
-  <script>
-    // reload every 3s to update dashboard values
-    setTimeout(()=>{ window.location.reload(); }, 3000);
-  </script>
-</body>
-</html>
-"""
-
-LIVE_HTML_HEAD = """
-<html><head><title>Live Logs</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{background:#0b1220;color:#7fffd4;font-family:monospace;padding:10px}
-pre{white-space:pre-wrap;word-break:break-word}
-</style>
-</head><body>
-<h2>Live Backend Logs</h2>
-<pre>
-"""
-
-LIVE_HTML_TAIL = """
-</pre>
-</body></html>
-"""
-
-# -----------------------
-# Flask routes
-# -----------------------
-@app.route("/", methods=["GET"])
-def dashboard():
-    running = _progress.get("running", False)
-    started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_progress["start_time"])) if _progress.get("start_time") else "Not started"
-    live_snip = "\n".join(get_live_lines(20))
-    return render_template_string(DASH_HTML,
-                                  running=running,
-                                  started=started,
-                                  current_user=_progress.get("current_user"),
-                                  current_thread=_progress.get("current_thread"),
-                                  current_page=_progress.get("current_page"),
-                                  total_likes=_progress.get("total_likes"),
-                                  threads_completed=_progress.get("threads_completed"),
-                                  last_error=_progress.get("last_error"),
-                                  users_count=len(USERS),
-                                  threads_count=len(THREADS),
-                                  delay=DELAY_BETWEEN_PAGES,
-                                  max_pages=MAX_PAGES_PER_THREAD,
-                                  live_snippet=live_snip)
-
-@app.route("/start", methods=["POST"])
-def http_start():
-    ok, msg = start_worker()
-    add_log(f"HTTP /start called -> {msg}")
-    return redirect(url_for("dashboard"))
-
-@app.route("/stop", methods=["POST"])
-def http_stop():
-    ok, msg = stop_worker()
-    add_log(f"HTTP /stop called -> {msg}")
-    return redirect(url_for("dashboard"))
-
-@app.route("/live")
-def live():
-    # return full live log page auto-refreshing
-    lines = get_live_lines(LIVE_LOG_MAX)
-    content = LIVE_HTML_HEAD + "\n".join(lines) + LIVE_HTML_TAIL
-    return Response(content, mimetype="text/html")
-
-@app.route("/status")
-def status():
-    uptime = 0
-    if _progress.get("start_time"):
-        uptime = int(time.time() - _progress["start_time"])
-    return jsonify({
-        "running": _progress.get("running", False),
-        "current_user": _progress.get("current_user"),
-        "current_thread": _progress.get("current_thread"),
-        "current_page": _progress.get("current_page"),
-        "total_likes": _progress.get("total_likes"),
-        "threads_completed": _progress.get("threads_completed"),
-        "uptime_seconds": uptime,
-        "last_error": _progress.get("last_error"),
-    })
-
-# -----------------------
-# Startup
-# -----------------------
-if __name__ == "__main__":
-    add_log("Application starting in SIMULATION mode.")
-    # Run Flask app (Render uses port 8080)
-    app.run(host="0.0.0.0", port=8080)
+      <div class="card
